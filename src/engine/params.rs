@@ -39,7 +39,36 @@ pub struct EditParams {
     #[serde(default = "default_color_nr")]
     pub color_nr: f32,
 
+    pub crop: CropParams,
+
     pub tone_curve: ToneCurves,
+}
+
+/// Straighten + crop. The crop rect is normalized (0..1) within the "safe
+/// area" — the largest axis-aligned, source-aspect rectangle that fits
+/// inside the rotated image — so it stays valid as the angle changes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CropParams {
+    /// Rotation in degrees, -45..45 (positive = clockwise).
+    pub angle: f32,
+    /// [x, y, w, h] in 0..1 of the safe area.
+    pub rect: [f32; 4],
+}
+
+impl Default for CropParams {
+    fn default() -> Self {
+        Self {
+            angle: 0.0,
+            rect: [0.0, 0.0, 1.0, 1.0],
+        }
+    }
+}
+
+impl CropParams {
+    pub fn is_identity(&self) -> bool {
+        self.angle == 0.0 && self.rect == [0.0, 0.0, 1.0, 1.0]
+    }
 }
 
 fn default_color_nr() -> f32 {
@@ -63,6 +92,7 @@ impl Default for EditParams {
             vibrance: 0.0,
             saturation: 0.0,
             color_nr: default_color_nr(),
+            crop: CropParams::default(),
             tone_curve: ToneCurves::default(),
         }
     }

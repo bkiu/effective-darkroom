@@ -112,7 +112,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     let t = std::time::Instant::now();
-    let _ = engine.render(&params, ref_temp, ref_tint, base.as_ref());
+    let _ = engine.render(&params, ref_temp, ref_tint, base.as_ref(), false);
     let rendered = engine.read_output().expect("readback");
     eprintln!("rendered + readback in {:?}", t.elapsed());
 

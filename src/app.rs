@@ -101,6 +101,8 @@ struct CurrentImage {
     source_is_linear: bool,
     /// Capture metadata for the info overlay (from the decode).
     shot_info: Option<crate::importer::metadata::CaptureInfo>,
+    /// Source pixel dimensions of the engine source (for crop geometry).
+    src_dims: Option<(u32, u32)>,
 }
 
 impl CurrentImage {
@@ -148,6 +150,8 @@ pub struct App {
     current: Option<CurrentImage>,
     /// EXIF info overlay in the loupe, toggled with I.
     show_info: bool,
+    /// Crop tool state (overlay active, aspect choice, auto status).
+    crop_ui: develop_panel::CropUiState,
     /// Scroll the filmstrip to the current photo on the next frame.
     strip_scroll_pending: bool,
     latest_zoom: f32,
@@ -269,6 +273,13 @@ impl App {
             },
             delete: DeleteDialog::default(),
             show_info: config.show_info_overlay.unwrap_or(false),
+            crop_ui: develop_panel::CropUiState {
+                // ED_STARTUP_CROP=1: open with the crop tool active (dev hook)
+                tool_active: std::env::var("ED_STARTUP_CROP").is_ok(),
+                aspect: Default::default(),
+                auto_pending: false,
+                auto_failed: false,
+            },
             config,
             library_prompt_open,
             curve_state: ToneCurveState::default(),
@@ -386,6 +397,7 @@ impl App {
             base_curve,
             source_is_linear: false,
             shot_info: None,
+            src_dims: None,
         });
         self.rendered = None;
         self.loupe.reset_view();
@@ -469,6 +481,7 @@ impl App {
                     cur.loading = !is_final;
                     cur.rendered_params = None; // force re-render
                     cur.shot_info = Some(image.shot_info.clone());
+                    cur.src_dims = Some((image.width, image.height));
 
                     if let Some(as_shot) = image.as_shot {
                         cur.as_shot = Some(as_shot);
@@ -559,6 +572,20 @@ impl App {
                     file_name,
                 } => {
                     self.export.progress = Some((current, total, file_name));
+                }
+                JobResult::AutoStraighten { image_id, angle } => {
+                    self.crop_ui.auto_pending = false;
+                    match angle {
+                        Some(a) => {
+                            if let Some(cur) = &mut self.current {
+                                if cur.id == image_id {
+                                    cur.params.crop.angle = a;
+                                    cur.dirty_since = Some(Instant::now());
+                                }
+                            }
+                        }
+                        None => self.crop_ui.auto_failed = true,
+                    }
                 }
                 JobResult::ExportDone(outcome) => {
                     self.export.progress = None;
@@ -1056,7 +1083,7 @@ impl App {
         } else {
             None
         };
-        self.rendered = engine.render(&cur.params, ref_temp, ref_tint, base);
+        self.rendered = engine.render(&cur.params, ref_temp, ref_tint, base, self.crop_ui.tool_active);
         cur.rendered_params = Some(cur.params.clone());
     }
 }
@@ -1272,6 +1299,7 @@ impl eframe::App for App {
                                 self.rendered,
                                 loading,
                                 info.as_deref(),
+                                None,
                             );
                         }
                     }
@@ -1298,7 +1326,30 @@ impl eframe::App for App {
                                 &mut self.curve_state,
                                 histogram.as_deref(),
                                 self.copied_params.is_some(),
+                                &mut self.crop_ui,
                             );
+                            if resp.crop_toggled {
+                                cur.rendered_params = None; // render mode changed
+                            }
+                            if resp.aspect_changed
+                                && crate::ui::crop_overlay::apply_aspect(
+                                    &mut cur.params.crop.rect,
+                                    self.crop_ui.aspect,
+                                    cur.src_dims
+                                        .map(|(w, h)| w as f32 / h as f32)
+                                        .unwrap_or(1.5),
+                                ) {
+                                    cur.dirty_since = Some(Instant::now());
+                                }
+                            if resp.auto_straighten {
+                                if let Some(rec) =
+                                    self.images.iter().find(|r| r.id == cur.id).cloned()
+                                {
+                                    self.crop_ui.auto_pending = true;
+                                    self.crop_ui.auto_failed = false;
+                                    self.jobs.start_auto_straighten(rec, ctx.clone());
+                                }
+                            }
                             if resp.copy {
                                 self.copied_params = Some(cur.params.clone());
                             }
@@ -1329,13 +1380,40 @@ impl eframe::App for App {
                     self.maybe_render();
                     let loading = self.current.as_ref().is_some_and(|c| c.loading);
                     let info = self.info_lines();
-                    loupe::show(
+                    let aspect = self.crop_ui.aspect;
+                    let tool_active = self.crop_ui.tool_active;
+                    let mut edit_storage = None;
+                    if tool_active {
+                        if let Some(cur) = &mut self.current {
+                            if let Some((w, h)) = cur.src_dims {
+                                let safe_uv = crate::engine::crop::safe_area_in_preview(
+                                    &cur.params.crop,
+                                    w,
+                                    h,
+                                );
+                                edit_storage =
+                                    Some(crate::ui::crop_overlay::CropEdit {
+                                        rect: &mut cur.params.crop.rect,
+                                        safe_uv,
+                                        safe_px_aspect: w as f32 / h as f32,
+                                        aspect,
+                                    });
+                            }
+                        }
+                    }
+                    let crop_changed = loupe::show(
                         ui,
                         &mut self.loupe,
                         self.rendered,
                         loading,
                         info.as_deref(),
+                        edit_storage.as_mut(),
                     );
+                    if crop_changed {
+                        if let Some(cur) = &mut self.current {
+                            cur.dirty_since = Some(Instant::now());
+                        }
+                    }
                 });
             }
         }

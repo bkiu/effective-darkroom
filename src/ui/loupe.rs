@@ -18,14 +18,17 @@ impl LoupeState {
 }
 
 /// Draw the rendered image (if any) into the available space, with an
-/// optional EXIF info overlay (lines of text, first line emphasized).
+/// optional EXIF info overlay and an optional crop-edit overlay (crop tool).
+/// Returns true when the crop rect changed.
 pub fn show(
     ui: &mut egui::Ui,
     state: &mut LoupeState,
     tex: Option<(egui::TextureId, Vec2)>,
     loading: bool,
     info: Option<&[String]>,
-) {
+    crop: Option<&mut crate::ui::crop_overlay::CropEdit<'_>>,
+) -> bool {
+    let mut crop_changed = false;
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     ui.painter().rect_filled(rect, 0.0, Color32::from_gray(16));
 
@@ -41,10 +44,17 @@ pub fn show(
                 Color32::from_gray(120),
             );
         }
-        return;
+        return false;
     };
 
-    if response.double_clicked() {
+    let cropping = crop.is_some();
+    if cropping {
+        // Crop tool: always fit, no pan/zoom; drags belong to the overlay.
+        state.one_to_one = false;
+        state.pan = Vec2::ZERO;
+    }
+
+    if !cropping && response.double_clicked() {
         state.one_to_one = !state.one_to_one;
         // Center the zoom on the click point.
         if state.one_to_one {
@@ -63,7 +73,7 @@ pub fn show(
     let draw_rect;
     let uv;
     if state.one_to_one {
-        if response.dragged() {
+        if !cropping && response.dragged() {
             state.pan -= response.drag_delta();
         }
         let view = rect.size();
@@ -89,6 +99,10 @@ pub fn show(
     }
     ui.painter().image(tex_id, draw_rect, uv, Color32::WHITE);
 
+    if let Some(edit) = crop {
+        crop_changed = crate::ui::crop_overlay::show(ui, draw_rect, edit);
+    }
+
     if let Some(lines) = info {
         draw_info_overlay(ui, rect, lines);
     }
@@ -100,6 +114,7 @@ pub fn show(
             egui::Spinner::new().size(20.0),
         );
     }
+    crop_changed
 }
 
 fn draw_info_overlay(ui: &egui::Ui, rect: Rect, lines: &[String]) {

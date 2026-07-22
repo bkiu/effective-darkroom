@@ -18,6 +18,9 @@ struct Uniforms {
     dehaze_amt: f32,         // -1..1
     use_blur: f32,           // 1.0 when blur textures are valid
     color_nr: f32,           // 0..1 chroma noise reduction strength
+    // Affine rows mapping output uv -> source uv (crop/straighten).
+    uv_r0: vec4<f32>,
+    uv_r1: vec4<f32>,
 };
 
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
@@ -58,7 +61,16 @@ fn lut_sample(v: f32) -> vec2<f32> {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    var rgb = textureSampleLevel(src_tex, src_samp, in.uv, 0.0).rgb;
+    let src_uv = vec2<f32>(
+        u.uv_r0.x * in.uv.x + u.uv_r0.y * in.uv.y + u.uv_r0.z,
+        u.uv_r1.x * in.uv.x + u.uv_r1.y * in.uv.y + u.uv_r1.z,
+    );
+    // Outside the source (only reachable in the crop tool's full preview):
+    // render dark neutral instead of smeared edge pixels.
+    if (src_uv.x < 0.0 || src_uv.x > 1.0 || src_uv.y < 0.0 || src_uv.y > 1.0) {
+        return vec4<f32>(0.06, 0.06, 0.06, 1.0);
+    }
+    var rgb = textureSampleLevel(src_tex, src_samp, src_uv, 0.0).rgb;
 
     // --- linear domain ---
     rgb = vec3<f32>(dot(u.wb0.xyz, rgb), dot(u.wb1.xyz, rgb), dot(u.wb2.xyz, rgb));
@@ -88,7 +100,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let y = luma_of(enc);
         let cb = (enc.b - y) / 1.8556;
         let cr = (enc.r - y) / 1.5748;
-        let blurred = textureSampleLevel(blur_small_tex, src_samp, in.uv, 0.0);
+        let blurred = textureSampleLevel(blur_small_tex, src_samp, src_uv, 0.0);
         let f = 1.0 - exp(-u.color_nr * 5.5);
         let cb2 = mix(cb, blurred.g, f);
         let cr2 = mix(cr, blurred.b, f);
@@ -101,8 +113,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Texture/Clarity: unsharp-mask local contrast on luminance.
     if (u.use_blur > 0.5 && (abs(u.texture_amt) > 0.001 || abs(u.clarity_amt) > 0.001)) {
         let l = luma_of(enc);
-        let bs = textureSampleLevel(blur_small_tex, src_samp, in.uv, 0.0).r;
-        let bl = textureSampleLevel(blur_large_tex, src_samp, in.uv, 0.0).r;
+        let bs = textureSampleLevel(blur_small_tex, src_samp, src_uv, 0.0).r;
+        let bl = textureSampleLevel(blur_large_tex, src_samp, src_uv, 0.0).r;
         var delta = u.texture_amt * 0.6 * (l - bs) + u.clarity_amt * 0.75 * (l - bl);
         delta = clamp(delta, -0.3, 0.3);
         let scale = (clamp(l + delta, 0.0, 1.0)) / max(l, 1e-4);

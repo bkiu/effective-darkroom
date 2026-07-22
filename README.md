@@ -32,7 +32,9 @@ release binary.
   flags with distinct badges (rejects render dimmed); a Show filter row
   narrows any view by flag status and drives grid, filmstrip and arrow-key
   navigation alike.
-- **Develop** (upper-right tab): White balance (Temp/Tint, As Shot for
+- **Develop** (upper-right tab): Crop & straighten (interactive overlay
+  with aspect ratios, angle slider, and Lightroom-style Auto straighten
+  that detects dominant lines); White balance (Temp/Tint, As Shot for
   RAW), Exposure, Contrast, Highlights, Shadows, Whites, Blacks, Texture,
   Clarity, Dehaze, Vibrance, Saturation, chroma noise reduction, and a tone
   curve editor with draggable points, per-channel (RGB) curves and a live

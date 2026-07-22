@@ -2,6 +2,7 @@
 //! Tone Curve. Layout follows Lightroom's develop module.
 
 use crate::engine::params::{EditParams, TEMP_MAX, TEMP_MIN};
+use crate::ui::crop_overlay::AspectChoice;
 use crate::ui::tone_curve::{self, ToneCurveState};
 
 pub struct PanelResponse {
@@ -9,6 +10,16 @@ pub struct PanelResponse {
     pub reset: bool,
     pub copy: bool,
     pub paste: bool,
+    pub crop_toggled: bool,
+    pub auto_straighten: bool,
+    pub aspect_changed: bool,
+}
+
+pub struct CropUiState {
+    pub tool_active: bool,
+    pub aspect: AspectChoice,
+    pub auto_pending: bool,
+    pub auto_failed: bool,
 }
 
 pub fn show(
@@ -18,11 +29,15 @@ pub fn show(
     curve_state: &mut ToneCurveState,
     histogram: Option<&[[u32; 256]; 3]>,
     can_paste: bool,
+    crop_ui: &mut CropUiState,
 ) -> PanelResponse {
     let mut changed = false;
     let mut reset = false;
     let mut copy = false;
     let mut paste = false;
+    let mut crop_toggled = false;
+    let mut auto_straighten = false;
+    let mut aspect_changed = false;
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -52,6 +67,61 @@ pub fn show(
             });
             ui.separator();
 
+            ui.label(egui::RichText::new("Crop & Straighten").strong());
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(crop_ui.tool_active, "✂ Crop")
+                    .on_hover_text("Toggle the crop tool overlay")
+                    .clicked()
+                {
+                    crop_ui.tool_active = !crop_ui.tool_active;
+                    crop_toggled = true;
+                }
+                if crop_ui.auto_pending {
+                    ui.spinner();
+                    ui.label(egui::RichText::new("analyzing…").weak());
+                } else if ui
+                    .button("Auto")
+                    .on_hover_text("Detect dominant lines and straighten")
+                    .clicked()
+                {
+                    auto_straighten = true;
+                }
+                if ui
+                    .button("Reset")
+                    .on_hover_text("Clear crop and rotation")
+                    .clicked()
+                {
+                    params.crop = Default::default();
+                    changed = true;
+                }
+            });
+            if crop_ui.auto_failed {
+                ui.label(
+                    egui::RichText::new("No clear lines found to straighten by")
+                        .weak()
+                        .small(),
+                );
+            }
+            changed |= slider(ui, "Angle", &mut params.crop.angle, -45.0..=45.0, false);
+            ui.horizontal(|ui| {
+                ui.add_sized([70.0, 18.0], egui::Label::new("Aspect"));
+                egui::ComboBox::from_id_salt("crop-aspect")
+                    .selected_text(crop_ui.aspect.label())
+                    .show_ui(ui, |ui| {
+                        for a in AspectChoice::ALL {
+                            if ui
+                                .selectable_value(&mut crop_ui.aspect, a, a.label())
+                                .clicked()
+                            {
+                                aspect_changed = true;
+                            }
+                        }
+                    });
+            });
+
+            ui.add_space(12.0);
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("White Balance").strong());
                 if let Some((temp, tint)) = as_shot {
@@ -103,6 +173,9 @@ pub fn show(
         reset,
         copy,
         paste,
+        crop_toggled,
+        auto_straighten,
+        aspect_changed,
     }
 }
 

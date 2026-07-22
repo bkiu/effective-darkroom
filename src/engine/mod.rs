@@ -11,6 +11,8 @@
 //!      asynchronously for the histogram
 
 pub mod color;
+pub mod crop;
+pub mod straighten;
 pub mod curve;
 pub mod export;
 pub mod params;
@@ -47,6 +49,8 @@ struct Uniforms {
     dehaze_amt: f32,
     use_blur: f32,
     color_nr: f32,
+    uv_r0: [f32; 4],
+    uv_r1: [f32; 4],
 }
 
 #[repr(C)]
@@ -679,6 +683,7 @@ impl RenderEngine {
         ref_tint: f32,
         baseline_ev: f32,
         use_blur: bool,
+        uv: ([f32; 3], [f32; 3]),
     ) -> Uniforms {
         let wb = color::wb_matrix(params.wb_temp, params.wb_tint, ref_temp, ref_tint);
         Uniforms {
@@ -693,6 +698,8 @@ impl RenderEngine {
             dehaze_amt: params.dehaze / 100.0,
             use_blur: if use_blur { 1.0 } else { 0.0 },
             color_nr: params.color_nr / 100.0,
+            uv_r0: [uv.0[0], uv.0[1], uv.0[2], 0.0],
+            uv_r1: [uv.1[0], uv.1[1], uv.1[2], 0.0],
         }
     }
 
@@ -731,13 +738,20 @@ impl RenderEngine {
         ref_temp: f32,
         ref_tint: f32,
         base: Option<&BaseCurve>,
+        crop_preview: bool,
     ) -> Option<(egui::TextureId, egui::Vec2)> {
-        self.source.as_ref()?;
+        let (src_w, src_h) = {
+            let src = self.source.as_ref()?;
+            (src.width, src.height)
+        };
+        let (out_w, out_h) = crop::output_size(&params.crop, src_w, src_h, crop_preview);
+        self.ensure_output(out_w, out_h);
         self.output.as_ref()?;
 
         let use_blur =
             params.texture != 0.0 || params.clarity != 0.0 || params.color_nr > 0.0;
         let baseline_ev = base.map(|b| b.baseline_ev).unwrap_or(0.0);
+        let uv = crop::uv_affine(&params.crop, src_w, src_h, crop_preview);
 
         self.queue.write_buffer(
             &self.uniform_buf,
@@ -748,6 +762,7 @@ impl RenderEngine {
                 ref_tint,
                 baseline_ev,
                 use_blur,
+                uv,
             )),
         );
         self.upload_lut(params, base);
@@ -757,7 +772,6 @@ impl RenderEngine {
         self.ensure_develop_bind_group(use_blur);
 
         let bind_group = self.develop_bind_group.as_ref()?;
-        let source = self.source.as_ref()?;
         let output = self.output.as_ref()?;
 
         let mut encoder = self
@@ -822,7 +836,7 @@ impl RenderEngine {
         }
 
         let id = output.egui_id?;
-        Some((id, egui::vec2(source.width as f32, source.height as f32)))
+        Some((id, egui::vec2(output.width as f32, output.height as f32)))
     }
 
     /// Blocking readback of the last rendered output (export / headless).

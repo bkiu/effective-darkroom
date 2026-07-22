@@ -64,6 +64,11 @@ pub enum JobResult {
         file_name: String,
     },
     ExportDone(crate::engine::export::ExportOutcome),
+    AutoStraighten {
+        image_id: i64,
+        /// Suggested crop angle, or None when no confident line direction.
+        angle: Option<f32>,
+    },
 }
 
 pub struct Jobs {
@@ -115,6 +120,30 @@ impl Jobs {
 
     pub fn request_full_decode(&self, generation: u64, rec: ImageRecord) {
         let _ = self.full_tx.send(FullDecodeRequest { generation, rec });
+    }
+
+    /// Analyze an image for auto-straighten on a background thread.
+    pub fn start_auto_straighten(&self, rec: ImageRecord, ctx: egui::Context) {
+        let tx = self.results_tx.clone();
+        std::thread::Builder::new()
+            .name("auto-straighten".into())
+            .spawn(move || {
+                let angle = crate::decode::full::decode_preview(&rec)
+                    .ok()
+                    .and_then(|img| match img.pixels {
+                        crate::decode::full::FullPixels::Srgb8(rgba) => {
+                            image::RgbaImage::from_raw(img.width, img.height, rgba)
+                        }
+                        _ => None,
+                    })
+                    .and_then(|rgba| crate::engine::straighten::detect_angle(&rgba));
+                let _ = tx.send(JobResult::AutoStraighten {
+                    image_id: rec.id,
+                    angle,
+                });
+                ctx.request_repaint();
+            })
+            .expect("spawn auto-straighten thread");
     }
 
     /// Spawn a one-shot export job on its own thread with its own catalog

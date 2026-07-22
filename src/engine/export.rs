@@ -200,7 +200,7 @@ fn render_full(
             engine.set_source(image.width, image.height, SourcePixels::LinearF16(rgba))
         }
     }
-    let _ = engine.render(&params, ref_temp, ref_tint, base.as_ref());
+    let _ = engine.render(&params, ref_temp, ref_tint, base.as_ref(), false);
     engine.read_output().context("GPU readback")
 }
 
