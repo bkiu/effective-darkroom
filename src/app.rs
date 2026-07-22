@@ -43,6 +43,8 @@ pub struct AppConfig {
     pub library_root: Option<PathBuf>,
     /// UI zoom factor (egui zoom; adjustable with Ctrl+= / Ctrl+-).
     pub ui_zoom: Option<f32>,
+    /// Last-used export settings.
+    pub export: Option<crate::ui::export_dialog::ExportPrefs>,
     /// Legacy field, migrated into `library_root`.
     pub last_import_dest: Option<PathBuf>,
 }
@@ -196,7 +198,13 @@ impl App {
             grid: grid_state,
             loupe: loupe::LoupeState::default(),
             import,
-            export: ExportDialog::default(),
+            export: {
+                let mut d = ExportDialog::default();
+                if let Some(prefs) = &config.export {
+                    d.prefs = prefs.clone();
+                }
+                d
+            },
             delete: DeleteDialog::default(),
             config,
             library_prompt_open,
@@ -676,6 +684,11 @@ impl eframe::App for App {
         }
 
         if let Some(mut spec) = self.export.show(&ctx, self.grid.selection.len()) {
+            // Remember the export settings for next time.
+            if self.config.export.as_ref() != Some(&self.export.prefs) {
+                self.config.export = Some(self.export.prefs.clone());
+                self.config.save();
+            }
             // Export in library order; make sure pending edits are saved so
             // the export renders what the user sees.
             self.flush_edits();

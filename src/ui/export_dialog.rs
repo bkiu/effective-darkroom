@@ -1,37 +1,87 @@
-//! Export dialog: JPEG quality, long-edge resize, filename prefix and naming
-//! scheme, destination folder, batch progress.
+//! Export dialog, Lightroom-style: pick a base location (Pictures /
+//! Documents / Nextcloud / custom) plus an optional subfolder, JPEG quality,
+//! long-edge resize, filename prefix and naming scheme.
 
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 use crate::engine::export::{ExportOutcome, ExportSpec, Naming};
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExportBase {
+    Pictures,
+    Documents,
+    Nextcloud,
+    Custom(PathBuf),
+}
+
+impl ExportBase {
+    fn label(&self) -> String {
+        match self {
+            ExportBase::Pictures => "Pictures".into(),
+            ExportBase::Documents => "Documents".into(),
+            ExportBase::Nextcloud => "Nextcloud".into(),
+            ExportBase::Custom(p) => p.display().to_string(),
+        }
+    }
+
+    fn path(&self) -> Option<PathBuf> {
+        match self {
+            ExportBase::Pictures => dirs::picture_dir(),
+            ExportBase::Documents => dirs::document_dir(),
+            ExportBase::Nextcloud => dirs::home_dir().map(|h| h.join("Nextcloud")),
+            ExportBase::Custom(p) => Some(p.clone()),
+        }
+    }
+}
+
+/// Persisted export settings (mirrors what Lightroom remembers).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExportPrefs {
+    pub base: ExportBase,
+    pub subfolder: String,
+    pub quality: u8,
+    pub resize_enabled: bool,
+    pub long_edge: u32,
+    pub prefix: String,
+    pub naming: Naming,
+}
+
+impl Default for ExportPrefs {
+    fn default() -> Self {
+        Self {
+            base: ExportBase::Pictures,
+            subfolder: String::new(),
+            quality: 90,
+            resize_enabled: true,
+            long_edge: 3000,
+            prefix: String::new(),
+            naming: Naming::Original,
+        }
+    }
+}
+
+impl ExportPrefs {
+    pub fn dest(&self) -> Option<PathBuf> {
+        let base = self.base.path()?;
+        let sub = self.subfolder.trim();
+        Some(if sub.is_empty() {
+            base
+        } else {
+            base.join(sub)
+        })
+    }
+}
+
+#[derive(Default)]
 pub struct ExportDialog {
     pub open: bool,
-    dest: Option<PathBuf>,
-    quality: u8,
-    resize_enabled: bool,
-    long_edge: u32,
-    prefix: String,
-    naming: Naming,
+    pub prefs: ExportPrefs,
     /// (current, total, file name) while an export runs.
     pub progress: Option<(usize, usize, String)>,
     pub last_outcome: Option<ExportOutcome>,
-}
-
-impl Default for ExportDialog {
-    fn default() -> Self {
-        Self {
-            open: false,
-            dest: None,
-            quality: 90,
-            resize_enabled: false,
-            long_edge: 2048,
-            prefix: String::new(),
-            naming: Naming::Original,
-            progress: None,
-            last_outcome: None,
-        }
-    }
 }
 
 impl ExportDialog {
@@ -48,7 +98,7 @@ impl ExportDialog {
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
-            .default_width(400.0)
+            .default_width(440.0)
             .show(ctx, |ui| {
                 if let Some((cur, total, name)) = &self.progress {
                     ui.label(format!("Exporting {cur} of {total}…"));
@@ -65,46 +115,85 @@ impl ExportDialog {
                 ));
                 ui.separator();
 
+                ui.label(egui::RichText::new("Export Location").strong());
                 ui.horizontal(|ui| {
-                    ui.label("Destination");
-                    if ui.button("Choose…").clicked() {
-                        if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                            self.dest = Some(dir);
-                        }
+                    ui.label("Export to");
+                    let current_label = self.prefs.base.label();
+                    egui::ComboBox::from_id_salt("export-base")
+                        .selected_text(current_label)
+                        .show_ui(ui, |ui| {
+                            for base in
+                                [ExportBase::Pictures, ExportBase::Documents, ExportBase::Nextcloud]
+                            {
+                                let label = base.label();
+                                ui.selectable_value(&mut self.prefs.base, base, label);
+                            }
+                            if ui.button("Other folder…").clicked() {
+                                if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                                    self.prefs.base = ExportBase::Custom(dir);
+                                }
+                                ui.close();
+                            }
+                        });
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Subfolder");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.prefs.subfolder)
+                            .hint_text("optional")
+                            .desired_width(220.0),
+                    );
+                });
+                match self.prefs.dest() {
+                    Some(dest) => {
+                        ui.label(
+                            egui::RichText::new(format!("→ {}", dest.display()))
+                                .weak()
+                                .small(),
+                        );
                     }
-                    match &self.dest {
-                        Some(d) => ui.label(d.display().to_string()),
-                        None => ui.label(egui::RichText::new("not set").weak()),
-                    };
+                    None => {
+                        ui.colored_label(
+                            egui::Color32::LIGHT_RED,
+                            "This location doesn't exist on this system",
+                        );
+                    }
+                }
+
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("File Settings").strong());
+                ui.horizontal(|ui| {
+                    ui.label("Quality");
+                    let mut q = self.prefs.quality as u32;
+                    ui.add(egui::Slider::new(&mut q, 1..=100));
+                    self.prefs.quality = q as u8;
                 });
 
                 ui.add_space(6.0);
+                ui.label(egui::RichText::new("Image Sizing").strong());
                 ui.horizontal(|ui| {
-                    ui.label("Quality");
-                    let mut q = self.quality as u32;
-                    ui.add(egui::Slider::new(&mut q, 1..=100));
-                    self.quality = q as u8;
-                });
-
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.resize_enabled, "Resize long edge to");
+                    ui.checkbox(&mut self.prefs.resize_enabled, "Resize long edge to");
                     ui.add_enabled(
-                        self.resize_enabled,
-                        egui::DragValue::new(&mut self.long_edge)
+                        self.prefs.resize_enabled,
+                        egui::DragValue::new(&mut self.prefs.long_edge)
                             .range(256..=10000)
                             .suffix(" px"),
                     );
                 });
 
                 ui.add_space(6.0);
+                ui.label(egui::RichText::new("File Naming").strong());
                 ui.horizontal(|ui| {
                     ui.label("Prefix");
-                    ui.text_edit_singleline(&mut self.prefix);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.prefs.prefix)
+                            .hint_text("optional")
+                            .desired_width(160.0),
+                    );
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Filename");
-                    ui.radio_value(&mut self.naming, Naming::Original, "Original name");
-                    ui.radio_value(&mut self.naming, Naming::DateTime, "YYYYMMDD_HHMMSS");
+                    ui.radio_value(&mut self.prefs.naming, Naming::Original, "Original name");
+                    ui.radio_value(&mut self.prefs.naming, Naming::DateTime, "YYYYMMDD_HHMMSS");
                 });
 
                 ui.separator();
@@ -115,19 +204,20 @@ impl ExportDialog {
                     }
                 }
 
-                let ready = self.dest.is_some() && selected > 0;
-                if ui
-                    .add_enabled(ready, egui::Button::new("Export"))
-                    .clicked()
-                {
+                let dest = self.prefs.dest();
+                let ready = dest.is_some() && selected > 0;
+                if ui.add_enabled(ready, egui::Button::new("Export")).clicked() {
                     self.last_outcome = None;
                     start = Some(ExportSpec {
                         image_ids: Vec::new(), // filled by the caller
-                        dest: self.dest.clone().unwrap(),
-                        quality: self.quality,
-                        long_edge: self.resize_enabled.then_some(self.long_edge),
-                        prefix: self.prefix.trim().to_string(),
-                        naming: self.naming,
+                        dest: dest.unwrap(),
+                        quality: self.prefs.quality,
+                        long_edge: self
+                            .prefs
+                            .resize_enabled
+                            .then_some(self.prefs.long_edge),
+                        prefix: self.prefs.prefix.trim().to_string(),
+                        naming: self.prefs.naming,
                     });
                 }
             });

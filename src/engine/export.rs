@@ -12,7 +12,7 @@ use crate::engine::curve::BaseCurve;
 use crate::engine::params::EditParams;
 use crate::engine::{RenderEngine, SourcePixels};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Naming {
     /// Keep the original file stem.
     Original,
