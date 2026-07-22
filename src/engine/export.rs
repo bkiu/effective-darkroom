@@ -34,6 +34,9 @@ pub struct ExportSpec {
     pub image_ids: Vec<i64>,
     pub dest: PathBuf,
     pub format: ExportFormat,
+    /// For DNG: bake the develop edits into the pixels (linear DNG) instead
+    /// of converting the untouched raw data.
+    pub dng_bake: bool,
     /// JPEG quality 1-100.
     pub quality: u8,
     /// Resize so the long edge is at most this many pixels.
@@ -123,8 +126,42 @@ fn export_one(
     rec: &ImageRecord,
 ) -> Result<()> {
     if spec.format == ExportFormat::Dng {
-        return export_one_dng(spec, rec);
+        return if spec.dng_bake {
+            export_one_dng_baked(engine, catalog, spec, rec)
+        } else {
+            export_one_dng(spec, rec)
+        };
     }
+    let rendered = render_full(engine, catalog, rec)?;
+
+    let final_img = match spec.long_edge {
+        Some(edge) if edge > 0 && edge < rendered.width().max(rendered.height()) => {
+            resize_long_edge(&rendered, edge)?
+        }
+        _ => rendered,
+    };
+
+    let out_path = unique_path(&spec.dest, &export_file_name(spec, rec));
+    let file = std::fs::File::create(&out_path).context("create output file")?;
+    let mut writer = std::io::BufWriter::new(file);
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
+        &mut writer,
+        spec.quality.clamp(1, 100),
+    );
+    let rgb = image::DynamicImage::ImageRgba8(final_img).to_rgb8();
+    encoder
+        .encode(rgb.as_raw(), rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)
+        .context("encode jpeg")?;
+    Ok(())
+}
+
+/// Render an image at full resolution through the develop pipeline with its
+/// saved edits (the same path the preview uses).
+fn render_full(
+    engine: &mut RenderEngine,
+    catalog: &Catalog,
+    rec: &ImageRecord,
+) -> Result<image::RgbaImage> {
     // Decode at full quality.
     let image = match rec.kind {
         FileKind::Jpeg => full::decode_preview(rec)?,
@@ -164,27 +201,7 @@ fn export_one(
         }
     }
     let _ = engine.render(&params, ref_temp, ref_tint, base.as_ref());
-    let rendered = engine.read_output().context("GPU readback")?;
-
-    let final_img = match spec.long_edge {
-        Some(edge) if edge > 0 && edge < rendered.width().max(rendered.height()) => {
-            resize_long_edge(&rendered, edge)?
-        }
-        _ => rendered,
-    };
-
-    let out_path = unique_path(&spec.dest, &export_file_name(spec, rec));
-    let file = std::fs::File::create(&out_path).context("create output file")?;
-    let mut writer = std::io::BufWriter::new(file);
-    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
-        &mut writer,
-        spec.quality.clamp(1, 100),
-    );
-    let rgb = image::DynamicImage::ImageRgba8(final_img).to_rgb8();
-    encoder
-        .encode(rgb.as_raw(), rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)
-        .context("encode jpeg")?;
-    Ok(())
+    engine.read_output().context("GPU readback")
 }
 
 /// Lossless DNG conversion of the original raw file (rawler / DNGLab).
@@ -206,6 +223,103 @@ fn export_one_dng(spec: &ExportSpec, rec: &ImageRecord) -> Result<()> {
     };
     rawler::dng::convert::convert_raw_file(&rec.abs_path, &mut writer, &params)
         .map_err(|e| anyhow::anyhow!("DNG conversion: {e}"))?;
+    Ok(())
+}
+
+/// Linear DNG with the develop edits baked into the pixels: the rendered
+/// output is converted back to linear light and stored as 16-bit RGB
+/// (LinearRaw), tagged as sRGB-primaries D65 so other apps reproduce the
+/// look. EXIF is carried over from the original raw file.
+fn export_one_dng_baked(
+    engine: &mut RenderEngine,
+    catalog: &Catalog,
+    spec: &ExportSpec,
+    rec: &ImageRecord,
+) -> Result<()> {
+    use rawler::dng::writer::DngWriter;
+    use rawler::dng::{DngCompression, DNG_VERSION_V1_4};
+    use rawler::formats::tiff::{Rational, SRational};
+    use rawler::imgop::xyz::Illuminant;
+    use rawler::tags::DngTag;
+
+    anyhow::ensure!(
+        rec.kind == FileKind::Raw,
+        "DNG export needs a RAW source (this is a JPEG)"
+    );
+    let rendered = render_full(engine, catalog, rec)?;
+    let (w, h) = (rendered.width() as usize, rendered.height() as usize);
+
+    // sRGB u8 → linear u16 lookup.
+    let lut: Vec<u16> = (0..256u32)
+        .map(|v| {
+            let x = v as f64 / 255.0;
+            let lin = if x <= 0.04045 {
+                x / 12.92
+            } else {
+                ((x + 0.055) / 1.055).powf(2.4)
+            };
+            (lin * 65535.0).round() as u16
+        })
+        .collect();
+    let mut data = Vec::with_capacity(w * h * 3);
+    for px in rendered.pixels() {
+        data.push(lut[px[0] as usize]);
+        data.push(lut[px[1] as usize]);
+        data.push(lut[px[2] as usize]);
+    }
+
+    let out_path = unique_path(&spec.dest, &export_file_name(spec, rec));
+    let file = std::fs::File::create(&out_path).context("create output file")?;
+    let mut writer = std::io::BufWriter::new(file);
+    let mut dng = DngWriter::new(&mut writer, DNG_VERSION_V1_4)
+        .map_err(|e| anyhow::anyhow!("DNG writer: {e}"))?;
+
+    let mut frame = dng.subframe(0);
+    frame
+        .rgb_image_u16(&data, w, h, DngCompression::Lossless, 1)
+        .map_err(|e| anyhow::anyhow!("write linear DNG frame: {e}"))?;
+    frame.finalize().map_err(|e| anyhow::anyhow!("finalize frame: {e}"))?;
+
+    // Thumbnail + preview from the rendered image.
+    let dynimg = image::DynamicImage::ImageRgba8(rendered);
+    let mut preview = dng.subframe(1);
+    preview
+        .preview(&dynimg, 0.8)
+        .map_err(|e| anyhow::anyhow!("write preview: {e}"))?;
+    preview.finalize().map_err(|e| anyhow::anyhow!("finalize preview: {e}"))?;
+    dng.thumbnail(&dynimg)
+        .map_err(|e| anyhow::anyhow!("write thumbnail: {e}"))?;
+
+    // Color tags: the stored data is linear with sRGB primaries, so
+    // ColorMatrix1 (XYZ → "camera") is the standard XYZ→sRGB matrix.
+    const XYZ_TO_SRGB: [[f64; 3]; 3] = [
+        [3.2404542, -1.5371385, -0.4985314],
+        [-0.9692660, 1.8760108, 0.0415560],
+        [0.0556434, -0.2040259, 1.0572252],
+    ];
+    let matrix: Vec<SRational> = XYZ_TO_SRGB
+        .iter()
+        .flatten()
+        .map(|v| SRational::new((v * 10000.0).round() as i32, 10000))
+        .collect();
+    dng.color_matrix(1, Illuminant::D65, &matrix);
+    dng.as_shot_neutral([Rational::new(1, 1), Rational::new(1, 1), Rational::new(1, 1)]);
+
+    // Carry EXIF over from the original raw file (best effort).
+    let unique_model = format!("{} {}", rec.camera_make, rec.camera_model);
+    if let Ok(src) = rawler::rawsource::RawSource::new(&rec.abs_path) {
+        if let Ok(decoder) = rawler::get_decoder(&src) {
+            if let Ok(md) = decoder.raw_metadata(&src, &Default::default()) {
+                if let Err(e) = dng.load_metadata(&md) {
+                    tracing::warn!("DNG metadata carry-over failed: {e}");
+                }
+            }
+        }
+    }
+    dng.root_ifd_mut()
+        .add_tag(DngTag::UniqueCameraModel, unique_model.trim());
+
+    dng.close().map_err(|e| anyhow::anyhow!("finish DNG: {e}"))?;
     Ok(())
 }
 
@@ -261,6 +375,7 @@ mod tests {
             image_ids: vec![],
             dest: PathBuf::new(),
             format: ExportFormat::Jpeg,
+            dng_bake: false,
             quality: 85,
             long_edge: None,
             prefix: String::new(),

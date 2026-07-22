@@ -46,7 +46,9 @@ release binary.
   reduction. RAWs open instantly via their embedded preview while the full
   decode runs in the background.
 - **Export**: Lightroom-style dialog — JPEG (through the develop pipeline)
-  or lossless DNG conversion of the raw data; base location (Pictures / Documents /
+  or DNG — either a lossless conversion of the untouched raw data or
+  a linear DNG with the develop edits baked into 16-bit pixels (EXIF
+  carried over); base location (Pictures / Documents /
   Nextcloud / custom) with optional subfolder, JPEG quality, long-edge
   resize (default 3000 px), filename prefix, original or `YYYYMMDD_HHMMSS`
   naming. Batch-exports the selection through the exact same GPU pipeline

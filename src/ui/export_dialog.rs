@@ -44,6 +44,7 @@ pub struct ExportPrefs {
     pub use_subfolder: bool,
     pub subfolder: String,
     pub format: ExportFormat,
+    pub dng_bake: bool,
     pub quality: u8,
     pub resize_enabled: bool,
     pub long_edge: u32,
@@ -58,6 +59,7 @@ impl Default for ExportPrefs {
             use_subfolder: false,
             subfolder: String::new(),
             format: ExportFormat::Jpeg,
+            dng_bake: false,
             quality: 90,
             resize_enabled: true,
             long_edge: 3000,
@@ -201,13 +203,23 @@ impl ExportDialog {
                         });
                     }
                     ExportFormat::Dng => {
+                        ui.checkbox(
+                            &mut self.prefs.dng_bake,
+                            "Bake develop edits into the DNG",
+                        );
+                        let note = if self.prefs.dng_bake {
+                            "Writes a linear DNG with your edits applied to the pixels \
+                             (16-bit, EXIF carried over). Not re-white-balanceable like \
+                             a true raw."
+                        } else {
+                            "Lossless conversion of the original raw data. Develop \
+                             edits are not baked in."
+                        };
+                        ui.label(egui::RichText::new(note).weak().small());
                         ui.label(
-                            egui::RichText::new(
-                                "Lossless conversion of the original raw data. Develop \
-                                 edits are not baked in; JPEG sources are skipped.",
-                            )
-                            .weak()
-                            .small(),
+                            egui::RichText::new("JPEG sources are skipped either way.")
+                                .weak()
+                                .small(),
                         );
                     }
                 }
@@ -247,6 +259,7 @@ impl ExportDialog {
                         image_ids: Vec::new(), // filled by the caller
                         dest: dest.unwrap(),
                         format: self.prefs.format,
+                        dng_bake: self.prefs.dng_bake,
                         quality: self.prefs.quality,
                         long_edge: self
                             .prefs
