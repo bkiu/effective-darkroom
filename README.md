@@ -24,7 +24,7 @@ the Wayland/Vulkan runtime libraries.
   live; that folder is the default import destination from then on.
 - **Library**: virtualized thumbnail grid (click / ctrl / shift selection),
   loupe view with fit & 1:1 zoom and panning, filmstrip in the single-image
-  views. Keys: `G` grid, `E` loupe, `D` develop, arrows to step, `I` EXIF
+  views. Keys: `G` or `Q` grid, `E` loupe, `D` develop, arrows to step, `I` EXIF
   info overlay, `Delete` to remove/trash.
 - **Collections & flags**: named collections in the left panel (create with
   ＋, add photos via right-click, click to filter); pick/reject flags with

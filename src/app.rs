@@ -588,7 +588,8 @@ impl App {
         if right {
             self.step_current(1);
         }
-        if key_g {
+        let key_q = ctx.input(|i| i.key_pressed(egui::Key::Q));
+        if key_g || key_q {
             self.view = View::Library;
             self.library_mode = LibraryMode::Grid;
         }
