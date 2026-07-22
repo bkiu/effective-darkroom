@@ -25,11 +25,29 @@ fn main() -> eframe::Result {
         }
     }
 
+    let icon = image::load_from_memory(include_bytes!("../assets/icon.png"))
+        .map(|img| {
+            let rgba = img.to_rgba8();
+            let (width, height) = rgba.dimensions();
+            egui::IconData {
+                rgba: rgba.into_raw(),
+                width,
+                height,
+            }
+        })
+        .ok();
+
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([1440.0, 900.0])
+        .with_min_inner_size([900.0, 600.0])
+        .with_title("Effective Darkroom")
+        .with_app_id("effective-darkroom");
+    if let Some(icon) = icon {
+        viewport = viewport.with_icon(icon);
+    }
+
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1440.0, 900.0])
-            .with_min_inner_size([900.0, 600.0])
-            .with_title("Effective Darkroom"),
+        viewport,
         wgpu_options,
         ..Default::default()
     };
