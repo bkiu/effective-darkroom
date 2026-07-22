@@ -129,6 +129,7 @@ pub struct App {
     filter_reject: bool,
     /// In-progress "new collection" name entry in the side panel.
     new_collection_name: Option<String>,
+    new_collection_focus_pending: bool,
     jobs: Jobs,
     engine: Option<RenderEngine>,
     view: View,
@@ -220,6 +221,7 @@ impl App {
             filter_unflagged: true,
             filter_reject: true,
             new_collection_name: None,
+            new_collection_focus_pending: false,
             jobs: Jobs::new(cc.egui_ctx.clone()),
             engine,
             view,
@@ -704,6 +706,7 @@ impl App {
                             && self.new_collection_name.is_none()
                         {
                             self.new_collection_name = Some(String::new());
+                            self.new_collection_focus_pending = true;
                         }
                     });
                 });
@@ -751,20 +754,35 @@ impl App {
                     let resp = ui.add(
                         egui::TextEdit::singleline(name).hint_text("collection name"),
                     );
-                    resp.request_focus();
-                    let confirmed = resp.lost_focus()
+                    // Focus the field only when it first appears; grabbing
+                    // focus every frame would swallow the Enter confirm.
+                    if self.new_collection_focus_pending {
+                        resp.request_focus();
+                        self.new_collection_focus_pending = false;
+                    }
+                    let enter = resp.lost_focus()
                         && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    let cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                    if confirmed {
-                        let name = name.trim().to_string();
-                        if !name.is_empty() {
-                            match self.catalog.create_collection(&name) {
-                                Ok(cid) => {
-                                    self.reload_collections();
-                                    self.active_collection = Some(cid);
-                                }
-                                Err(e) => tracing::error!("create collection: {e:#}"),
+                    let trimmed = name.trim().to_string();
+                    let mut confirmed = enter;
+                    let mut cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(!trimmed.is_empty(), egui::Button::new("Create"))
+                            .clicked()
+                        {
+                            confirmed = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            cancelled = true;
+                        }
+                    });
+                    if confirmed && !trimmed.is_empty() {
+                        match self.catalog.create_collection(&trimmed) {
+                            Ok(cid) => {
+                                self.reload_collections();
+                                self.active_collection = Some(cid);
                             }
+                            Err(e) => tracing::error!("create collection: {e:#}"),
                         }
                         self.new_collection_name = None;
                     } else if cancelled {
