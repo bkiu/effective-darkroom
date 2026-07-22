@@ -1,10 +1,8 @@
-//! The Basic panel: white balance, tone, presence sliders. Layout follows
-//! Lightroom's develop module.
+//! The develop side panel: Basic (white balance, tone, presence) and the
+//! Tone Curve. Layout follows Lightroom's develop module.
 
 use crate::engine::params::{EditParams, TEMP_MAX, TEMP_MIN};
-
-/// Sliders not yet wired into the render pipeline are shown disabled.
-const UNWIRED_HINT: &str = "Not wired up yet — coming with the full tone pipeline";
+use crate::ui::tone_curve::{self, ToneCurveState};
 
 pub struct PanelResponse {
     pub changed: bool,
@@ -15,6 +13,8 @@ pub fn show(
     ui: &mut egui::Ui,
     params: &mut EditParams,
     as_shot: Option<(f32, f32)>,
+    curve_state: &mut ToneCurveState,
+    histogram: Option<&[[u32; 256]; 3]>,
 ) -> PanelResponse {
     let mut changed = false;
     let mut reset = false;
@@ -51,20 +51,25 @@ pub fn show(
             ui.add_space(8.0);
             ui.label(egui::RichText::new("Tone").strong());
             changed |= slider(ui, "Exposure", &mut params.exposure, -5.0..=5.0, false);
-            disabled_slider(ui, "Contrast", &mut params.contrast);
-            disabled_slider(ui, "Highlights", &mut params.highlights);
-            disabled_slider(ui, "Shadows", &mut params.shadows);
-            disabled_slider(ui, "Whites", &mut params.whites);
-            disabled_slider(ui, "Blacks", &mut params.blacks);
+            changed |= slider(ui, "Contrast", &mut params.contrast, -100.0..=100.0, false);
+            changed |= slider(ui, "Highlights", &mut params.highlights, -100.0..=100.0, false);
+            changed |= slider(ui, "Shadows", &mut params.shadows, -100.0..=100.0, false);
+            changed |= slider(ui, "Whites", &mut params.whites, -100.0..=100.0, false);
+            changed |= slider(ui, "Blacks", &mut params.blacks, -100.0..=100.0, false);
 
             ui.add_space(8.0);
             ui.label(egui::RichText::new("Presence").strong());
-            disabled_slider(ui, "Texture", &mut params.texture);
-            disabled_slider(ui, "Clarity", &mut params.clarity);
-            disabled_slider(ui, "Dehaze", &mut params.dehaze);
+            changed |= slider(ui, "Texture", &mut params.texture, -100.0..=100.0, false);
+            changed |= slider(ui, "Clarity", &mut params.clarity, -100.0..=100.0, false);
+            changed |= slider(ui, "Dehaze", &mut params.dehaze, -100.0..=100.0, false);
             ui.add_space(4.0);
             changed |= slider(ui, "Vibrance", &mut params.vibrance, -100.0..=100.0, false);
             changed |= slider(ui, "Saturation", &mut params.saturation, -100.0..=100.0, false);
+
+            ui.add_space(10.0);
+            ui.separator();
+            changed |= tone_curve::show(ui, curve_state, &mut params.tone_curve, histogram);
+            ui.add_space(8.0);
         });
 
     PanelResponse { changed, reset }
@@ -77,30 +82,14 @@ fn slider(
     range: std::ops::RangeInclusive<f32>,
     logarithmic: bool,
 ) -> bool {
-    let mut resp = None;
+    let mut changed = false;
     ui.horizontal(|ui| {
         ui.add_sized([70.0, 18.0], egui::Label::new(label));
         let slider = egui::Slider::new(value, range)
             .logarithmic(logarithmic)
             .fixed_decimals(if logarithmic { 0 } else { 2 });
         let r = ui.add_sized([ui.available_width(), 18.0], slider);
-        let double_clicked = r.double_clicked();
-        resp = Some((r.changed(), double_clicked));
+        changed = r.changed();
     });
-    let (changed, _) = resp.unwrap();
     changed
-}
-
-fn disabled_slider(ui: &mut egui::Ui, label: &str, value: &mut f32) {
-    ui.horizontal(|ui| {
-        ui.add_sized([70.0, 18.0], egui::Label::new(egui::RichText::new(label).weak()));
-        ui.add_enabled_ui(false, |ui| {
-            ui.add_sized(
-                [ui.available_width(), 18.0],
-                egui::Slider::new(value, -100.0..=100.0).fixed_decimals(0),
-            );
-        })
-        .response
-        .on_hover_text(UNWIRED_HINT);
-    });
 }

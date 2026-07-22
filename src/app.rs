@@ -5,11 +5,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::catalog::{Catalog, FileKind, ImageRecord};
 use crate::decode::full::{AsShotWb, FullPixels};
+use crate::engine::curve::BaseCurve;
 use crate::engine::params::{EditParams, PARAMS_VERSION};
 use crate::engine::{RenderEngine, SourcePixels};
 use crate::jobs::{JobResult, Jobs};
 use crate::ui::{
-    develop_panel, grid, import_dialog::ImportDialog, loupe, top_bar,
+    develop_panel, grid, import_dialog::ImportDialog, loupe, tone_curve::ToneCurveState,
+    top_bar,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +76,11 @@ struct CurrentImage {
     had_saved_edit: bool,
     /// As-shot WB estimate (RAW only), used as the WB reference point.
     as_shot: Option<AsShotWb>,
+    /// Per-camera base render curve (RAW only).
+    base_curve: Option<BaseCurve>,
+    /// True once the engine source is the linear RAW decode (the base curve
+    /// only applies then; the embedded preview is already camera-toned).
+    source_is_linear: bool,
 }
 
 impl CurrentImage {
@@ -97,6 +104,7 @@ pub struct App {
     loupe: loupe::LoupeState,
     import: ImportDialog,
     config: AppConfig,
+    curve_state: ToneCurveState,
     current: Option<CurrentImage>,
     decode_generation: u64,
     /// Latest rendered output for the loupe.
@@ -153,6 +161,7 @@ impl App {
             loupe: loupe::LoupeState::default(),
             import,
             config,
+            curve_state: ToneCurveState::default(),
             current: None,
             decode_generation: 0,
             rendered: None,
@@ -183,6 +192,8 @@ impl App {
             }
         };
         let had_saved_edit = matches!(self.catalog.load_edit(id), Ok(Some(_)));
+        let base_curve = (rec.kind == FileKind::Raw)
+            .then(|| BaseCurve::for_camera(&rec.camera_model));
         self.current = Some(CurrentImage {
             id,
             kind: rec.kind,
@@ -193,6 +204,8 @@ impl App {
             loading: true,
             had_saved_edit,
             as_shot: None,
+            base_curve,
+            source_is_linear: false,
         });
         self.rendered = None;
         self.loupe.reset_view();
@@ -283,16 +296,22 @@ impl App {
 
                     if let Some(engine) = &mut self.engine {
                         match &image.pixels {
-                            FullPixels::Srgb8(rgba) => engine.set_source(
-                                image.width,
-                                image.height,
-                                SourcePixels::Srgb8(rgba),
-                            ),
-                            FullPixels::LinearF16(rgba) => engine.set_source(
-                                image.width,
-                                image.height,
-                                SourcePixels::LinearF16(rgba),
-                            ),
+                            FullPixels::Srgb8(rgba) => {
+                                cur.source_is_linear = false;
+                                engine.set_source(
+                                    image.width,
+                                    image.height,
+                                    SourcePixels::Srgb8(rgba),
+                                );
+                            }
+                            FullPixels::LinearF16(rgba) => {
+                                cur.source_is_linear = true;
+                                engine.set_source(
+                                    image.width,
+                                    image.height,
+                                    SourcePixels::LinearF16(rgba),
+                                );
+                            }
                         }
                     }
                 }
@@ -392,7 +411,12 @@ impl App {
             return;
         }
         let (ref_temp, ref_tint) = cur.ref_wb();
-        self.rendered = engine.render(&cur.params, ref_temp, ref_tint);
+        let base = if cur.source_is_linear {
+            cur.base_curve.as_ref()
+        } else {
+            None
+        };
+        self.rendered = engine.render(&cur.params, ref_temp, ref_tint, base);
         cur.rendered_params = Some(cur.params.clone());
     }
 }
@@ -464,8 +488,15 @@ impl eframe::App for App {
                 });
             }
             View::Develop => {
+                if let Some(engine) = &mut self.engine {
+                    engine.poll_histogram();
+                }
+                let histogram = self
+                    .engine
+                    .as_ref()
+                    .and_then(|e| e.histogram.clone());
                 egui::Panel::right("develop_panel")
-                    .default_size(300.0)
+                    .default_size(320.0)
                     .resizable(true)
                     .show(ui, |ui| {
                         if let Some(cur) = &mut self.current {
@@ -474,6 +505,8 @@ impl eframe::App for App {
                                 ui,
                                 &mut cur.params,
                                 as_shot.map(|w| (w.temp, w.tint)),
+                                &mut self.curve_state,
+                                histogram.as_deref(),
                             );
                             if resp.reset {
                                 cur.params = EditParams::default();
