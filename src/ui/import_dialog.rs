@@ -429,11 +429,10 @@ impl ImportDialog {
             Color32::from_gray(if checked { 220 } else { 130 }),
         );
 
-        if response.clicked() {
-            if !self.checked.insert(key) {
+        if response.clicked()
+            && !self.checked.insert(key) {
                 self.checked.remove(&key);
             }
-        }
     }
 
     fn importing_ui(&mut self, ui: &mut egui::Ui) {

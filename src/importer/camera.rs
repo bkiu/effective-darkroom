@@ -103,7 +103,7 @@ pub fn download_preview_bytes(camera: &Camera, file: &CardFile) -> Result<Vec<u8
         .wait()
         .with_context(|| format!("preview {}", file.name))?;
     let data = preview
-        .get_data(&camera)
+        .get_data(camera)
         .wait()
         .with_context(|| format!("preview data {}", file.name))?;
     Ok(data.into_vec())
