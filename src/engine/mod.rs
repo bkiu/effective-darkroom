@@ -46,7 +46,7 @@ struct Uniforms {
     clarity_amt: f32,
     dehaze_amt: f32,
     use_blur: f32,
-    _pad0: f32,
+    color_nr: f32,
 }
 
 #[repr(C)]
@@ -136,7 +136,7 @@ pub struct RenderEngine {
 }
 
 const OUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-const BLUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
+const BLUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 fn texture_bgl_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
@@ -281,7 +281,7 @@ impl RenderEngine {
             "luma-pipeline",
             &blur_shader,
             &blur_bgl,
-            "fs_luma",
+            "fs_ycc",
             BLUR_FORMAT,
         );
         let blur_pipeline = make_pipeline(
@@ -692,7 +692,7 @@ impl RenderEngine {
             clarity_amt: params.clarity / 100.0,
             dehaze_amt: params.dehaze / 100.0,
             use_blur: if use_blur { 1.0 } else { 0.0 },
-            _pad0: 0.0,
+            color_nr: params.color_nr / 100.0,
         }
     }
 
@@ -735,7 +735,8 @@ impl RenderEngine {
         self.source.as_ref()?;
         self.output.as_ref()?;
 
-        let use_blur = params.texture != 0.0 || params.clarity != 0.0;
+        let use_blur =
+            params.texture != 0.0 || params.clarity != 0.0 || params.color_nr > 0.0;
         let baseline_ev = base.map(|b| b.baseline_ev).unwrap_or(0.0);
 
         self.queue.write_buffer(

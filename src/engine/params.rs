@@ -34,7 +34,16 @@ pub struct EditParams {
     pub vibrance: f32,
     pub saturation: f32,
 
+    /// Chroma noise reduction 0-100 (Lightroom-style Color NR). Defaults to
+    /// 25; fresh JPEG imports get 0 since cameras denoise their JPEGs.
+    #[serde(default = "default_color_nr")]
+    pub color_nr: f32,
+
     pub tone_curve: ToneCurves,
+}
+
+fn default_color_nr() -> f32 {
+    25.0
 }
 
 impl Default for EditParams {
@@ -53,6 +62,7 @@ impl Default for EditParams {
             dehaze: 0.0,
             vibrance: 0.0,
             saturation: 0.0,
+            color_nr: default_color_nr(),
             tone_curve: ToneCurves::default(),
         }
     }

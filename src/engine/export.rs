@@ -117,7 +117,13 @@ fn export_one(
     // Edit params: saved edit or defaults (+ as-shot WB adoption for RAW).
     let mut params = match catalog.load_edit(rec.id)? {
         Some((_ver, json)) => EditParams::from_json(&json),
-        None => EditParams::default(),
+        None => {
+            let mut p = EditParams::default();
+            if rec.kind == FileKind::Jpeg {
+                p.color_nr = 0.0;
+            }
+            p
+        }
     };
     let (ref_temp, ref_tint) = match image.as_shot {
         Some(w) => (w.temp, w.tint),

@@ -17,7 +17,7 @@ struct Uniforms {
     clarity_amt: f32,        // -1..1
     dehaze_amt: f32,         // -1..1
     use_blur: f32,           // 1.0 when blur textures are valid
-    _pad0: f32,
+    color_nr: f32,           // 0..1 chroma noise reduction strength
 };
 
 @group(0) @binding(0) var src_tex: texture_2d<f32>;
@@ -82,8 +82,24 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // --- encoded (display) domain ---
     var enc = srgb_encode(rgb);
 
+    // Chroma noise reduction: replace high-frequency chroma with the blurred
+    // half-res chroma, keeping luminance untouched.
+    if (u.use_blur > 0.5 && u.color_nr > 0.001) {
+        let y = luma_of(enc);
+        let cb = (enc.b - y) / 1.8556;
+        let cr = (enc.r - y) / 1.5748;
+        let blurred = textureSampleLevel(blur_small_tex, src_samp, in.uv, 0.0);
+        let f = 1.0 - exp(-u.color_nr * 5.5);
+        let cb2 = mix(cb, blurred.g, f);
+        let cr2 = mix(cr, blurred.b, f);
+        let r = y + 1.5748 * cr2;
+        let b = y + 1.8556 * cb2;
+        let g = (y - 0.2126 * r - 0.0722 * b) / 0.7152;
+        enc = clamp(vec3<f32>(r, g, b), vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+
     // Texture/Clarity: unsharp-mask local contrast on luminance.
-    if (u.use_blur > 0.5) {
+    if (u.use_blur > 0.5 && (abs(u.texture_amt) > 0.001 || abs(u.clarity_amt) > 0.001)) {
         let l = luma_of(enc);
         let bs = textureSampleLevel(blur_small_tex, src_samp, in.uv, 0.0).r;
         let bl = textureSampleLevel(blur_large_tex, src_samp, in.uv, 0.0).r;

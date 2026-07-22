@@ -85,6 +85,10 @@ pub fn show(
             changed |= slider(ui, "Vibrance", &mut params.vibrance, -100.0..=100.0, false);
             changed |= slider(ui, "Saturation", &mut params.saturation, -100.0..=100.0, false);
 
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("Detail").strong());
+            changed |= slider(ui, "Color NR", &mut params.color_nr, 0.0..=100.0, false);
+
             ui.add_space(10.0);
             ui.separator();
             changed |= tone_curve::show(ui, curve_state, &mut params.tone_curve, histogram);

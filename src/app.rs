@@ -213,7 +213,14 @@ impl App {
         };
         let params = match self.catalog.load_edit(id) {
             Ok(Some((_ver, json))) => EditParams::from_json(&json),
-            Ok(None) => EditParams::default(),
+            Ok(None) => {
+                let mut p = EditParams::default();
+                // Camera JPEGs are already denoised in-camera.
+                if rec.kind == FileKind::Jpeg {
+                    p.color_nr = 0.0;
+                }
+                p
+            }
             Err(e) => {
                 tracing::error!("load edit for {id}: {e:#}");
                 EditParams::default()

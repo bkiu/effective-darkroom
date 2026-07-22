@@ -1,5 +1,5 @@
-// Prepasses for texture/clarity: adjusted-luma extraction, separable
-// gaussian blur, and plain downsample.
+// Prepasses for texture/clarity and chroma noise reduction: adjusted YCbCr
+// extraction, separable gaussian blur, and plain downsample.
 
 struct DevelopUniforms {
     wb0: vec4<f32>,
@@ -12,7 +12,7 @@ struct DevelopUniforms {
     clarity_amt: f32,
     dehaze_amt: f32,
     use_blur: f32,
-    _pad0: f32,
+    color_nr: f32,
 };
 
 struct BlurUniforms {
@@ -47,32 +47,35 @@ fn srgb_encode1(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c <= vec3<f32>(0.0031308));
 }
 
-// Adjusted, encoded luma of the source image (must mirror develop.wgsl's
-// linear-domain steps so the USM difference is computed in the same domain).
+// Adjusted, encoded YCbCr of the source image (must mirror develop.wgsl's
+// linear-domain steps so downstream deltas are computed in the same domain).
+// r = Y (used by the texture/clarity USM), gb = Cb/Cr (used by chroma NR).
 @fragment
-fn fs_luma(in: VsOut) -> @location(0) vec4<f32> {
+fn fs_ycc(in: VsOut) -> @location(0) vec4<f32> {
     var rgb = textureSampleLevel(in_tex, in_samp, in.uv, 0.0).rgb;
     rgb = vec3<f32>(dot(dev.wb0.xyz, rgb), dot(dev.wb1.xyz, rgb), dot(dev.wb2.xyz, rgb));
     rgb = clamp(rgb * dev.exposure_gain, vec3<f32>(0.0), vec3<f32>(1.0));
     let enc = srgb_encode1(rgb);
-    let l = dot(enc, vec3<f32>(0.2126, 0.7152, 0.0722));
-    return vec4<f32>(l, 0.0, 0.0, 1.0);
+    let y = dot(enc, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let cb = (enc.b - y) / 1.8556;
+    let cr = (enc.r - y) / 1.5748;
+    return vec4<f32>(y, cb, cr, 1.0);
 }
 
-// 1D gaussian along blur.dir; sigma < 0.5 degenerates to a passthrough
-// (used for the plain downsample stage).
+// 1D gaussian along blur.dir over all channels; sigma < 0.5 degenerates to a
+// passthrough (used for the plain downsample stage).
 @fragment
 fn fs_blur(in: VsOut) -> @location(0) vec4<f32> {
     if (blur.sigma < 0.5) {
-        return vec4<f32>(textureSampleLevel(in_tex, in_samp, in.uv, 0.0).r, 0.0, 0.0, 1.0);
+        return vec4<f32>(textureSampleLevel(in_tex, in_samp, in.uv, 0.0).rgb, 1.0);
     }
     let radius = i32(ceil(blur.sigma * 3.0));
-    var sum = 0.0;
+    var sum = vec3<f32>(0.0);
     var wsum = 0.0;
     for (var i = -radius; i <= radius; i = i + 1) {
         let w = exp(-0.5 * f32(i * i) / (blur.sigma * blur.sigma));
-        sum = sum + w * textureSampleLevel(in_tex, in_samp, in.uv + f32(i) * blur.dir, 0.0).r;
+        sum = sum + w * textureSampleLevel(in_tex, in_samp, in.uv + f32(i) * blur.dir, 0.0).rgb;
         wsum = wsum + w;
     }
-    return vec4<f32>(sum / wsum, 0.0, 0.0, 1.0);
+    return vec4<f32>(sum / wsum, 1.0);
 }
