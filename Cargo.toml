@@ -14,7 +14,6 @@ libraw-ffi = { path = "crates/libraw-ffi" }
 eframe = { version = "0.35", default-features = false, features = ["wgpu", "wayland", "x11", "default_fonts"] }
 egui = "0.35"
 egui_extras = "0.35"
-wgpu = "29"
 
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

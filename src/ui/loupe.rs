@@ -1,0 +1,97 @@
+//! Single-image view: fit-to-window or 1:1 with drag panning. Used by both
+//! the Library loupe and the Develop module.
+
+use egui::{Color32, Pos2, Rect, Sense, Vec2};
+
+#[derive(Default)]
+pub struct LoupeState {
+    pub one_to_one: bool,
+    /// Pan offset in image pixels at 1:1.
+    pub pan: Vec2,
+}
+
+impl LoupeState {
+    pub fn reset_view(&mut self) {
+        self.one_to_one = false;
+        self.pan = Vec2::ZERO;
+    }
+}
+
+/// Draw the rendered image (if any) into the available space.
+pub fn show(
+    ui: &mut egui::Ui,
+    state: &mut LoupeState,
+    tex: Option<(egui::TextureId, Vec2)>,
+    loading: bool,
+) {
+    let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+    ui.painter().rect_filled(rect, 0.0, Color32::from_gray(16));
+
+    let Some((tex_id, img_size)) = tex else {
+        if loading {
+            ui.put(rect, egui::Spinner::new().size(32.0));
+        } else {
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "No image selected",
+                egui::FontId::proportional(15.0),
+                Color32::from_gray(120),
+            );
+        }
+        return;
+    };
+
+    if response.double_clicked() {
+        state.one_to_one = !state.one_to_one;
+        // Center the zoom on the click point.
+        if state.one_to_one {
+            if let Some(pos) = response.interact_pointer_pos() {
+                let fit_scale = (rect.width() / img_size.x).min(rect.height() / img_size.y);
+                let fit_size = img_size * fit_scale;
+                let fit_rect = Rect::from_center_size(rect.center(), fit_size);
+                let rel = ((pos - fit_rect.min) / fit_scale).to_pos2();
+                state.pan = rel.to_vec2() - rect.size() / 2.0;
+            }
+        } else {
+            state.pan = Vec2::ZERO;
+        }
+    }
+
+    let draw_rect;
+    let uv;
+    if state.one_to_one {
+        if response.dragged() {
+            state.pan -= response.drag_delta();
+        }
+        let view = rect.size();
+        let max_pan = (img_size - view).max(Vec2::ZERO);
+        state.pan = state.pan.clamp(Vec2::ZERO, max_pan);
+        // Image smaller than viewport in either axis: center it.
+        let offset = ((view - img_size) / 2.0).max(Vec2::ZERO);
+        let visible = img_size.min(view);
+        let uv_min = state.pan / img_size;
+        let uv_max = (state.pan + visible) / img_size;
+        uv = Rect::from_min_max(
+            Pos2::new(uv_min.x, uv_min.y),
+            Pos2::new(uv_max.x, uv_max.y),
+        );
+        draw_rect = Rect::from_min_size(rect.min + offset, visible);
+    } else {
+        let scale = (rect.width() / img_size.x)
+            .min(rect.height() / img_size.y)
+            .min(1.0);
+        let size = img_size * scale;
+        draw_rect = Rect::from_center_size(rect.center(), size);
+        uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+    }
+    ui.painter().image(tex_id, draw_rect, uv, Color32::WHITE);
+
+    if loading {
+        // A decode for this image is still in flight (e.g. RAW linear pass).
+        ui.put(
+            Rect::from_min_size(rect.min + Vec2::splat(8.0), Vec2::splat(20.0)),
+            egui::Spinner::new().size(20.0),
+        );
+    }
+}

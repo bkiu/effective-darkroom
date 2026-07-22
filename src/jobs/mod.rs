@@ -11,6 +11,12 @@ pub enum JobRequest {
     Thumb(ImageRecord),
 }
 
+/// A full-resolution decode request; `generation` implements latest-wins.
+pub struct FullDecodeRequest {
+    pub generation: u64,
+    pub rec: ImageRecord,
+}
+
 pub enum JobResult {
     ThumbReady {
         image_id: i64,
@@ -18,6 +24,16 @@ pub enum JobResult {
     },
     ThumbFailed {
         image_id: i64,
+        error: String,
+    },
+    FullReady {
+        image_id: i64,
+        generation: u64,
+        image: crate::decode::full::FullImage,
+    },
+    FullFailed {
+        image_id: i64,
+        generation: u64,
         error: String,
     },
     ImportProgress {
@@ -30,6 +46,7 @@ pub enum JobResult {
 
 pub struct Jobs {
     thumb_tx: Sender<JobRequest>,
+    full_tx: Sender<FullDecodeRequest>,
     pub results_tx: Sender<JobResult>,
     pub results_rx: Receiver<JobResult>,
 }
@@ -52,8 +69,19 @@ impl Jobs {
                 .expect("spawn thumb worker");
         }
 
+        let (full_tx, full_rx) = crossbeam_channel::unbounded::<FullDecodeRequest>();
+        {
+            let tx = results_tx.clone();
+            let ctx = ctx.clone();
+            std::thread::Builder::new()
+                .name("full-decode".into())
+                .spawn(move || full_decode_worker(full_rx, tx, ctx))
+                .expect("spawn decode worker");
+        }
+
         Self {
             thumb_tx,
+            full_tx,
             results_tx,
             results_rx,
         }
@@ -61,6 +89,39 @@ impl Jobs {
 
     pub fn request_thumb(&self, rec: ImageRecord) {
         let _ = self.thumb_tx.send(JobRequest::Thumb(rec));
+    }
+
+    pub fn request_full_decode(&self, generation: u64, rec: ImageRecord) {
+        let _ = self.full_tx.send(FullDecodeRequest { generation, rec });
+    }
+}
+
+fn full_decode_worker(
+    rx: Receiver<FullDecodeRequest>,
+    tx: Sender<JobResult>,
+    ctx: egui::Context,
+) {
+    while let Ok(mut req) = rx.recv() {
+        // Latest-wins: skip straight to the newest queued request.
+        while let Ok(newer) = rx.try_recv() {
+            req = newer;
+        }
+        let result = match crate::decode::full::decode_full(&req.rec) {
+            Ok(image) => JobResult::FullReady {
+                image_id: req.rec.id,
+                generation: req.generation,
+                image,
+            },
+            Err(e) => JobResult::FullFailed {
+                image_id: req.rec.id,
+                generation: req.generation,
+                error: format!("{e:#}"),
+            },
+        };
+        if tx.send(result).is_err() {
+            return;
+        }
+        ctx.request_repaint();
     }
 }
 
