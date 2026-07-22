@@ -45,6 +45,19 @@ pub enum JobResult {
         file_name: String,
     },
     ImportDone(ImportOutcome),
+    ImportScanList {
+        generation: u64,
+        candidates: Vec<crate::importer::ImportCandidate>,
+    },
+    ImportScanThumb {
+        generation: u64,
+        key: usize,
+        image: egui::ColorImage,
+    },
+    ImportScanFailed {
+        generation: u64,
+        error: String,
+    },
     ExportProgress {
         current: usize,
         total: usize,

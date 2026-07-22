@@ -20,6 +20,7 @@ fn main() -> anyhow::Result<()> {
             dest_root,
             mode: ImportMode::Copy,
         },
+        &std::sync::atomic::AtomicBool::new(false),
         |cur, total, name| println!("[{cur}/{total}] {name}"),
     )?;
     println!(

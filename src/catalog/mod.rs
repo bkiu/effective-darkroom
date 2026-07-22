@@ -149,6 +149,16 @@ impl Catalog {
             .optional()?)
     }
 
+    /// Remove images (and their edits, via cascade) from the catalog. Files
+    /// on disk are untouched; the caller decides what happens to them.
+    pub fn delete_images(&self, ids: &[i64]) -> Result<()> {
+        let mut stmt = self.conn.prepare("DELETE FROM images WHERE id = ?1")?;
+        for id in ids {
+            stmt.execute(params![id])?;
+        }
+        Ok(())
+    }
+
     pub fn save_edit(&self, image_id: i64, version: i64, json: &str) -> Result<()> {
         self.conn.execute(
             "INSERT INTO edits (image_id, params_version, params_json, updated_ts)
@@ -214,6 +224,16 @@ mod tests {
         let cat = mem_catalog();
         cat.insert_image(&sample("/lib/a.jpg")).unwrap();
         assert!(cat.insert_image(&sample("/lib/a.jpg")).is_err());
+    }
+
+    #[test]
+    fn delete_cascades_edits() {
+        let cat = mem_catalog();
+        let id = cat.insert_image(&sample("/lib/a.jpg")).unwrap();
+        cat.save_edit(id, 1, "{}").unwrap();
+        cat.delete_images(&[id]).unwrap();
+        assert!(cat.all_images().unwrap().is_empty());
+        assert!(cat.load_edit(id).unwrap().is_none());
     }
 
     #[test]

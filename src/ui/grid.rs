@@ -58,6 +58,8 @@ pub struct GridResponse {
     /// User chose "Paste settings" from a cell context menu; apply the copied
     /// params to the whole selection.
     pub paste_to_selection: bool,
+    /// User chose "Delete…" from a cell context menu.
+    pub delete_selection: bool,
 }
 
 pub fn show(
@@ -172,7 +174,12 @@ fn cell(
     ));
 
     response.context_menu(|ui| {
-        let n = state.selection.len().max(1);
+        // Right-clicking outside the selection retargets it.
+        let n = if state.selection.contains(&rec.id) {
+            state.selection.len()
+        } else {
+            1
+        };
         if ui
             .add_enabled(
                 can_paste,
@@ -185,6 +192,18 @@ fn cell(
                 state.selection.insert(rec.id);
             }
             grid_response.paste_to_selection = true;
+            ui.close();
+        }
+        ui.separator();
+        if ui
+            .button(format!("Delete {n} photo{}…", if n == 1 { "" } else { "s" }))
+            .clicked()
+        {
+            if !state.selection.contains(&rec.id) {
+                state.selection.clear();
+                state.selection.insert(rec.id);
+            }
+            grid_response.delete_selection = true;
             ui.close();
         }
     });

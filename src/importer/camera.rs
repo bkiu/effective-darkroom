@@ -94,3 +94,17 @@ pub fn download(camera: &Camera, file: &CardFile, dest: &Path) -> Result<()> {
         .with_context(|| format!("download {}", file.name))?;
     Ok(())
 }
+
+/// Small preview JPEG for a card file (fast PTP thumbnail transfer).
+pub fn download_preview_bytes(camera: &Camera, file: &CardFile) -> Result<Vec<u8>> {
+    let preview = camera
+        .fs()
+        .download_preview(&file.folder, &file.name)
+        .wait()
+        .with_context(|| format!("preview {}", file.name))?;
+    let data = preview
+        .get_data(&camera)
+        .wait()
+        .with_context(|| format!("preview data {}", file.name))?;
+    Ok(data.into_vec())
+}

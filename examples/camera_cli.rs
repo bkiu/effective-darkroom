@@ -55,6 +55,7 @@ fn main() -> anyhow::Result<()> {
             dest_root: dest.clone(),
             mode: ImportMode::Move,
         },
+        &std::sync::atomic::AtomicBool::new(false),
         |cur, total, name| println!("[{cur}/{total}] {name}"),
     )?;
     println!(

@@ -1,3 +1,4 @@
+pub mod delete_dialog;
 pub mod develop_panel;
 pub mod export_dialog;
 pub mod grid;

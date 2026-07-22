@@ -8,6 +8,8 @@ pub mod camera;
 pub mod metadata;
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{Local, TimeZone};
@@ -23,10 +25,13 @@ pub enum ImportMode {
 
 #[derive(Debug, Clone)]
 pub enum ImportSource {
-    /// Files and/or directories chosen by the user.
+    /// Exact files to import (output of the picker).
     Paths(Vec<PathBuf>),
-    /// A USB-connected camera; new files on the card are downloaded.
-    Camera(camera::CameraDesc),
+    /// Selected files on a USB-connected camera.
+    Camera {
+        desc: camera::CameraDesc,
+        files: Vec<camera::CardFile>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -37,11 +42,38 @@ pub struct ImportSpec {
     pub mode: ImportMode,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ImportOutcome {
     pub imported: usize,
     pub skipped_duplicates: usize,
     pub errors: Vec<String>,
+    /// True when the user hit Stop before all files were processed.
+    pub cancelled: bool,
+}
+
+/// What the picker scans: paths expand to their contained photos, a camera
+/// lists its card.
+#[derive(Debug, Clone)]
+pub enum ScanSource {
+    Paths(Vec<PathBuf>),
+    Camera(camera::CameraDesc),
+}
+
+#[derive(Debug, Clone)]
+pub enum CandidateSource {
+    Path(PathBuf),
+    Card(camera::CardFile),
+}
+
+/// One photo available for import, listed by the picker.
+#[derive(Debug, Clone)]
+pub struct ImportCandidate {
+    /// Stable index within this scan.
+    pub key: usize,
+    pub name: String,
+    pub size: Option<u64>,
+    pub already_imported: bool,
+    pub source: CandidateSource,
 }
 
 /// Expand directories and filter to importable extensions, sorted for a
@@ -73,11 +105,12 @@ pub fn run(
     spec: ImportSpec,
     results: crossbeam_channel::Sender<JobResult>,
     ctx: egui::Context,
+    cancel: Arc<AtomicBool>,
 ) {
     std::thread::Builder::new()
         .name("import".into())
         .spawn(move || {
-            let outcome = run_blocking(&spec, |cur, total, name| {
+            let outcome = run_blocking(&spec, &cancel, |cur, total, name| {
                 let _ = results.send(JobResult::ImportProgress {
                     current: cur,
                     total,
@@ -86,9 +119,8 @@ pub fn run(
                 ctx.request_repaint();
             });
             let outcome = outcome.unwrap_or_else(|e| ImportOutcome {
-                imported: 0,
-                skipped_duplicates: 0,
                 errors: vec![format!("import failed: {e:#}")],
+                ..Default::default()
             });
             let _ = results.send(JobResult::ImportDone(outcome));
             ctx.request_repaint();
@@ -98,12 +130,15 @@ pub fn run(
 
 pub fn run_blocking(
     spec: &ImportSpec,
+    cancel: &AtomicBool,
     progress: impl FnMut(usize, usize, &str),
 ) -> Result<ImportOutcome> {
     let catalog = Catalog::open_default().context("open catalog")?;
     match &spec.source {
-        ImportSource::Paths(paths) => import_paths(&catalog, spec, paths, progress),
-        ImportSource::Camera(desc) => import_camera(&catalog, spec, desc, progress),
+        ImportSource::Paths(paths) => import_paths(&catalog, spec, paths, cancel, progress),
+        ImportSource::Camera { desc, files } => {
+            import_camera(&catalog, spec, desc, files, cancel, progress)
+        }
     }
 }
 
@@ -111,17 +146,18 @@ fn import_paths(
     catalog: &Catalog,
     spec: &ImportSpec,
     paths: &[PathBuf],
+    cancel: &AtomicBool,
     mut progress: impl FnMut(usize, usize, &str),
 ) -> Result<ImportOutcome> {
     let files = scan_sources(paths);
     let total = files.len();
-    let mut outcome = ImportOutcome {
-        imported: 0,
-        skipped_duplicates: 0,
-        errors: Vec::new(),
-    };
+    let mut outcome = ImportOutcome::default();
 
     for (i, src) in files.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            outcome.cancelled = true;
+            break;
+        }
         let name = src
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -140,17 +176,13 @@ fn import_camera(
     catalog: &Catalog,
     spec: &ImportSpec,
     desc: &camera::CameraDesc,
+    files: &[camera::CardFile],
+    cancel: &AtomicBool,
     mut progress: impl FnMut(usize, usize, &str),
 ) -> Result<ImportOutcome> {
-    let mut outcome = ImportOutcome {
-        imported: 0,
-        skipped_duplicates: 0,
-        errors: Vec::new(),
-    };
+    let mut outcome = ImportOutcome::default();
     progress(0, 0, "connecting to camera…");
     let cam = camera::connect(desc)?;
-    progress(0, 0, "scanning card…");
-    let files = camera::list_card_files(&cam)?;
     let total = files.len();
 
     // Staging area inside the destination so the final move is a cheap
@@ -161,17 +193,11 @@ fn import_camera(
     std::fs::create_dir_all(&staging).context("create staging dir")?;
 
     for (i, file) in files.iter().enumerate() {
-        progress(i + 1, total, &file.name);
-        // Cheap dedupe before downloading: name known to the catalog and
-        // same size on card → already imported.
-        let known = catalog.contains_name(&file.name).unwrap_or(false)
-            && camera::file_size(&cam, file)
-                .map(|size| catalog.contains_similar(&file.name, size).unwrap_or(false))
-                .unwrap_or(false);
-        if known {
-            outcome.skipped_duplicates += 1;
-            continue;
+        if cancel.load(Ordering::Relaxed) {
+            outcome.cancelled = true;
+            break;
         }
+        progress(i + 1, total, &file.name);
         let staged = staging.join(&file.name);
         let result = camera::download(&cam, file, &staged).and_then(|()| {
             import_one(catalog, ImportMode::Move, &spec.dest_root, &staged)
@@ -190,6 +216,150 @@ fn import_camera(
     }
     let _ = std::fs::remove_dir(&staging);
     Ok(outcome)
+}
+
+/// Scan a source and stream candidates (then thumbnails) back to the UI.
+/// Results are tagged with `generation` so stale scans can be dropped.
+pub fn scan(
+    source: ScanSource,
+    results: crossbeam_channel::Sender<JobResult>,
+    ctx: egui::Context,
+    generation: u64,
+    cancel: Arc<AtomicBool>,
+) {
+    std::thread::Builder::new()
+        .name("import-scan".into())
+        .spawn(move || {
+            if let Err(e) = scan_blocking(&source, &results, &ctx, generation, &cancel) {
+                let _ = results.send(JobResult::ImportScanFailed {
+                    generation,
+                    error: format!("{e:#}"),
+                });
+                ctx.request_repaint();
+            }
+        })
+        .expect("spawn scan thread");
+}
+
+fn scan_blocking(
+    source: &ScanSource,
+    results: &crossbeam_channel::Sender<JobResult>,
+    ctx: &egui::Context,
+    generation: u64,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let catalog = Catalog::open_default().context("open catalog")?;
+
+    // Phase 1: enumerate candidates (no thumbs yet).
+    let (candidates, cam) = match source {
+        ScanSource::Paths(paths) => {
+            let files = scan_sources(paths);
+            let candidates = files
+                .into_iter()
+                .enumerate()
+                .map(|(key, path)| {
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let size = std::fs::metadata(&path).ok().map(|m| m.len());
+                    let already_imported = catalog.contains_path(&path).unwrap_or(false)
+                        || size
+                            .map(|s| catalog.contains_similar(&name, s).unwrap_or(false))
+                            .unwrap_or(false);
+                    ImportCandidate {
+                        key,
+                        name,
+                        size,
+                        already_imported,
+                        source: CandidateSource::Path(path),
+                    }
+                })
+                .collect::<Vec<_>>();
+            (candidates, None)
+        }
+        ScanSource::Camera(desc) => {
+            let cam = camera::connect(desc)?;
+            let files = camera::list_card_files(&cam)?;
+            let candidates = files
+                .into_iter()
+                .enumerate()
+                .map(|(key, file)| {
+                    let size = camera::file_size(&cam, &file);
+                    let already_imported = catalog.contains_name(&file.name).unwrap_or(false)
+                        && size
+                            .map(|s| {
+                                catalog.contains_similar(&file.name, s).unwrap_or(false)
+                            })
+                            .unwrap_or(false);
+                    ImportCandidate {
+                        key,
+                        name: file.name.clone(),
+                        size,
+                        already_imported,
+                        source: CandidateSource::Card(file),
+                    }
+                })
+                .collect::<Vec<_>>();
+            (candidates, Some(cam))
+        }
+    };
+
+    let _ = results.send(JobResult::ImportScanList {
+        generation,
+        candidates: candidates.clone(),
+    });
+    ctx.request_repaint();
+
+    // Phase 2: thumbnails, streamed as they become available.
+    for cand in &candidates {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let thumb = candidate_thumb(cand, cam.as_ref());
+        if let Some(image) = thumb {
+            let _ = results.send(JobResult::ImportScanThumb {
+                generation,
+                key: cand.key,
+                image,
+            });
+            ctx.request_repaint();
+        }
+    }
+    Ok(())
+}
+
+const PICKER_THUMB: u32 = 256;
+
+fn candidate_thumb(
+    cand: &ImportCandidate,
+    cam: Option<&gphoto2::Camera>,
+) -> Option<egui::ColorImage> {
+    let img: image::DynamicImage = match &cand.source {
+        CandidateSource::Path(path) => match FileKind::from_path(path)? {
+            FileKind::Jpeg => image::open(path).ok()?,
+            FileKind::Raw => {
+                let mut raw = libraw_ffi::RawFile::open(path).ok()?;
+                let flip = raw.metadata().flip;
+                let img = match raw.extract_thumb().ok()? {
+                    libraw_ffi::Thumb::Jpeg(bytes) => image::load_from_memory(&bytes).ok()?,
+                    libraw_ffi::Thumb::Rgb8 {
+                        width,
+                        height,
+                        data,
+                    } => image::RgbImage::from_raw(width, height, data)?.into(),
+                };
+                crate::decode::thumbs::apply_libraw_flip(img, flip)
+            }
+        },
+        CandidateSource::Card(file) => {
+            let bytes = camera::download_preview_bytes(cam?, file).ok()?;
+            image::load_from_memory(&bytes).ok()?
+        }
+    };
+    let thumb = img.thumbnail(PICKER_THUMB, PICKER_THUMB).to_rgba8();
+    let size = [thumb.width() as usize, thumb.height() as usize];
+    Some(egui::ColorImage::from_rgba_unmultiplied(size, thumb.as_raw()))
 }
 
 enum ImportedFile {

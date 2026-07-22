@@ -10,8 +10,14 @@ use crate::engine::params::{EditParams, PARAMS_VERSION};
 use crate::engine::{RenderEngine, SourcePixels};
 use crate::jobs::{JobResult, Jobs};
 use crate::ui::{
-    develop_panel, export_dialog::ExportDialog, grid, import_dialog::ImportDialog, loupe,
-    tone_curve::ToneCurveState, top_bar,
+    delete_dialog::{DeleteAction, DeleteDialog},
+    develop_panel,
+    export_dialog::ExportDialog,
+    grid,
+    import_dialog::{DialogAction, ImportDialog},
+    loupe,
+    tone_curve::ToneCurveState,
+    top_bar,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +113,7 @@ pub struct App {
     loupe: loupe::LoupeState,
     import: ImportDialog,
     export: ExportDialog,
+    delete: DeleteDialog,
     config: AppConfig,
     /// First-run prompt asking where the library should live.
     library_prompt_open: bool,
@@ -178,6 +185,7 @@ impl App {
             loupe: loupe::LoupeState::default(),
             import,
             export: ExportDialog::default(),
+            delete: DeleteDialog::default(),
             config,
             library_prompt_open,
             curve_state: ToneCurveState::default(),
@@ -356,12 +364,27 @@ impl App {
                     self.import.progress = Some((current, total, file_name));
                 }
                 JobResult::ImportDone(outcome) => {
-                    self.import.progress = None;
-                    self.import.last_outcome = Some(outcome);
+                    self.import.on_import_done(outcome);
                     match self.catalog.all_images() {
                         Ok(imgs) => self.images = imgs,
                         Err(e) => tracing::error!("reload images: {e:#}"),
                     }
+                }
+                JobResult::ImportScanList {
+                    generation,
+                    candidates,
+                } => {
+                    self.import.on_scan_list(generation, candidates);
+                }
+                JobResult::ImportScanThumb {
+                    generation,
+                    key,
+                    image,
+                } => {
+                    self.import.on_scan_thumb(ctx, generation, key, image);
+                }
+                JobResult::ImportScanFailed { generation, error } => {
+                    self.import.on_scan_failed(generation, error);
                 }
                 JobResult::ExportProgress {
                     current,
@@ -382,15 +405,20 @@ impl App {
         if ctx.egui_wants_keyboard_input() {
             return;
         }
-        let (left, right, key_g, key_e, key_d) = ctx.input(|i| {
+        let (left, right, key_g, key_e, key_d, key_del) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::ArrowLeft),
                 i.key_pressed(egui::Key::ArrowRight),
                 i.key_pressed(egui::Key::G),
                 i.key_pressed(egui::Key::E),
                 i.key_pressed(egui::Key::D),
+                i.key_pressed(egui::Key::Delete),
             )
         });
+        if key_del && !self.grid.selection.is_empty() {
+            self.delete
+                .request(self.grid.selection.iter().copied().collect());
+        }
         if left {
             self.step_current(-1);
         }
@@ -427,6 +455,56 @@ impl App {
             .or_else(|| self.images.first().map(|r| r.id));
         if let Some(id) = id {
             self.set_current(id);
+        }
+    }
+
+    /// Remove the images queued in the delete dialog from the catalog,
+    /// optionally moving the files to the system trash.
+    fn delete_images(&mut self, from_disk: bool) {
+        let ids = std::mem::take(&mut self.delete.ids);
+        if ids.is_empty() {
+            return;
+        }
+        let records: Vec<ImageRecord> = self
+            .images
+            .iter()
+            .filter(|r| ids.contains(&r.id))
+            .cloned()
+            .collect();
+
+        if let Err(e) = self.catalog.delete_images(&ids) {
+            tracing::error!("delete from catalog: {e:#}");
+            return;
+        }
+        for rec in &records {
+            let thumb = crate::catalog::thumbs_dir().join(format!("{}.jpg", rec.id));
+            let _ = std::fs::remove_file(thumb);
+            if from_disk {
+                if let Err(e) = trash::delete(&rec.abs_path) {
+                    tracing::error!("trash {}: {e:#}", rec.abs_path.display());
+                }
+            }
+        }
+
+        // Refresh state.
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|c| ids.contains(&c.id))
+        {
+            self.current = None;
+            self.rendered = None;
+            if let Some(engine) = &mut self.engine {
+                engine.clear_source();
+            }
+        }
+        for id in &ids {
+            self.grid.selection.remove(id);
+            self.grid.textures.pop(id);
+        }
+        match self.catalog.all_images() {
+            Ok(imgs) => self.images = imgs,
+            Err(e) => tracing::error!("reload images: {e:#}"),
         }
     }
 
@@ -518,13 +596,34 @@ impl eframe::App for App {
             self.ensure_current_from_selection();
         }
 
-        if let Some(spec) = self.import.show(&ctx) {
-            if self.config.library_root.is_none() {
-                self.config.library_root = Some(spec.dest_root.clone());
-                self.config.save();
+        match self.import.show(&ctx) {
+            DialogAction::None => {}
+            DialogAction::StartScan(source) => {
+                let cancel = self
+                    .import
+                    .scan_cancel_flag()
+                    .unwrap_or_default();
+                crate::importer::scan(
+                    source,
+                    self.jobs.results_tx.clone(),
+                    ctx.clone(),
+                    self.import.scan_generation,
+                    cancel,
+                );
             }
-            self.import.progress = Some((0, 0, String::from("scanning…")));
-            crate::importer::run(spec, self.jobs.results_tx.clone(), ctx.clone());
+            DialogAction::StartImport(spec, cancel) => {
+                if self.config.library_root.is_none() {
+                    self.config.library_root = Some(spec.dest_root.clone());
+                    self.config.save();
+                }
+                crate::importer::run(spec, self.jobs.results_tx.clone(), ctx.clone(), cancel);
+            }
+        }
+
+        match self.delete.show(&ctx) {
+            DeleteAction::None => {}
+            DeleteAction::RemoveFromLibrary => self.delete_images(false),
+            DeleteAction::DeleteFromDisk => self.delete_images(true),
         }
 
         if let Some(mut spec) = self.export.show(&ctx, self.grid.selection.len()) {
@@ -580,6 +679,11 @@ impl eframe::App for App {
                             );
                             if resp.paste_to_selection {
                                 self.paste_to_selection();
+                            }
+                            if resp.delete_selection {
+                                self.delete.request(
+                                    self.grid.selection.iter().copied().collect(),
+                                );
                             }
                             if let Some(&id) = self.grid.selection.iter().next() {
                                 if self.grid.selection.len() == 1 {
