@@ -41,9 +41,14 @@ const SAVE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(500)
 pub struct AppConfig {
     /// Default destination for imports; asked for once on first startup.
     pub library_root: Option<PathBuf>,
+    /// UI zoom factor (egui zoom; adjustable with Ctrl+= / Ctrl+-).
+    pub ui_zoom: Option<f32>,
     /// Legacy field, migrated into `library_root`.
     pub last_import_dest: Option<PathBuf>,
 }
+
+/// Default UI zoom: egui's stock text is small on a desktop monitor.
+const DEFAULT_UI_ZOOM: f32 = 1.25;
 
 impl AppConfig {
     fn path() -> PathBuf {
@@ -121,6 +126,9 @@ pub struct App {
     /// Develop settings captured by "Copy" for pasting onto other images.
     copied_params: Option<EditParams>,
     current: Option<CurrentImage>,
+    /// Scroll the filmstrip to the current photo on the next frame.
+    strip_scroll_pending: bool,
+    latest_zoom: f32,
     decode_generation: u64,
     /// Latest rendered output for the loupe.
     rendered: Option<(egui::TextureId, egui::Vec2)>,
@@ -131,6 +139,10 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
 
+        let early_config = AppConfig::load();
+        let zoom = early_config.ui_zoom.unwrap_or(DEFAULT_UI_ZOOM);
+        cc.egui_ctx.set_zoom_factor(zoom);
+
         let engine = cc
             .wgpu_render_state
             .as_ref()
@@ -139,7 +151,7 @@ impl App {
             tracing::error!("no wgpu render state; develop module disabled");
         }
 
-        let mut config = AppConfig::load();
+        let mut config = early_config;
         // Migrate the pre-library_root config field.
         if config.library_root.is_none() {
             if let Some(dest) = config.last_import_dest.take() {
@@ -191,6 +203,8 @@ impl App {
             curve_state: ToneCurveState::default(),
             copied_params: None,
             current: None,
+            strip_scroll_pending: false,
+            latest_zoom: zoom,
             decode_generation: 0,
             rendered: None,
             startup_error,
@@ -251,6 +265,7 @@ impl App {
 
         self.decode_generation += 1;
         self.jobs.request_full_decode(self.decode_generation, rec);
+        self.strip_scroll_pending = true;
     }
 
     /// Write pending edit changes for the current image to the catalog.
@@ -402,7 +417,13 @@ impl App {
                 }
                 JobResult::ExportDone(outcome) => {
                     self.export.progress = None;
-                    self.export.last_outcome = Some(outcome);
+                    // Close on clean success; stay open to show errors.
+                    if outcome.errors.is_empty() {
+                        self.export.open = false;
+                        self.export.last_outcome = None;
+                    } else {
+                        self.export.last_outcome = Some(outcome);
+                    }
                 }
             }
         }
@@ -531,6 +552,27 @@ impl App {
                     cur.dirty_since = None;
                 }
             }
+        }
+    }
+
+    /// Bottom filmstrip for the single-image views; switches images on click.
+    fn show_filmstrip(&mut self, ui: &mut egui::Ui) {
+        let mut clicked = None;
+        egui::Panel::bottom("filmstrip")
+            .exact_size(crate::ui::filmstrip::STRIP_HEIGHT)
+            .show(ui, |ui| {
+                clicked = crate::ui::filmstrip::show(
+                    ui,
+                    &mut self.grid,
+                    &self.images,
+                    &self.jobs,
+                    self.current.as_ref().map(|c| c.id),
+                    self.strip_scroll_pending,
+                );
+            });
+        self.strip_scroll_pending = false;
+        if let Some(id) = clicked {
+            self.set_current(id);
         }
     }
 
@@ -702,6 +744,7 @@ impl eframe::App for App {
                             }
                         }
                         LibraryMode::Loupe => {
+                            self.show_filmstrip(ui);
                             self.maybe_render();
                             let loading =
                                 self.current.as_ref().is_some_and(|c| c.loading);
@@ -757,15 +800,22 @@ impl eframe::App for App {
                         }
                     });
                 egui::CentralPanel::default().show(ui, |ui| {
+                    self.show_filmstrip(ui);
                     self.maybe_render();
                     let loading = self.current.as_ref().is_some_and(|c| c.loading);
                     loupe::show(ui, &mut self.loupe, self.rendered, loading);
                 });
             }
         }
+
+        self.latest_zoom = ctx.zoom_factor();
     }
 
     fn on_exit(&mut self) {
         self.flush_edits();
+        if self.config.ui_zoom != Some(self.latest_zoom) {
+            self.config.ui_zoom = Some(self.latest_zoom);
+            self.config.save();
+        }
     }
 }
