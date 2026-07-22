@@ -4,7 +4,7 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::{Catalog, FileKind, ImageRecord};
-use crate::decode::full::FullPixels;
+use crate::decode::full::{AsShotWb, FullPixels};
 use crate::engine::params::{EditParams, PARAMS_VERSION};
 use crate::engine::{RenderEngine, SourcePixels};
 use crate::jobs::{JobResult, Jobs};
@@ -70,6 +70,20 @@ struct CurrentImage {
     dirty_since: Option<Instant>,
     /// Waiting on a decode; the render source is stale or absent.
     loading: bool,
+    /// True if the catalog had an edit when this image was opened.
+    had_saved_edit: bool,
+    /// As-shot WB estimate (RAW only), used as the WB reference point.
+    as_shot: Option<AsShotWb>,
+}
+
+impl CurrentImage {
+    /// The white point the source pixels are balanced to.
+    fn ref_wb(&self) -> (f32, f32) {
+        match self.as_shot {
+            Some(ws) => (ws.temp, ws.tint),
+            None => (crate::engine::params::TEMP_DEFAULT, 0.0),
+        }
+    }
 }
 
 pub struct App {
@@ -114,12 +128,19 @@ impl App {
         let mut import = ImportDialog::default();
         import.dest_root = config.last_import_dest.clone();
 
-        // Dev helper: ED_STARTUP_VIEW=develop opens the develop module on the
-        // first image (useful for automated screenshots/tests).
+        // Dev helpers (useful for automated screenshots/tests):
+        // ED_STARTUP_VIEW=develop opens the develop module on startup;
+        // ED_STARTUP_IMAGE=<substring> preselects the first matching file.
         let view = match std::env::var("ED_STARTUP_VIEW").as_deref() {
             Ok("develop") => View::Develop,
             _ => View::Library,
         };
+        let mut grid_state = grid::GridState::default();
+        if let Ok(pat) = std::env::var("ED_STARTUP_IMAGE") {
+            if let Some(rec) = images.iter().find(|r| r.file_name.contains(&pat)) {
+                grid_state.selection.insert(rec.id);
+            }
+        }
 
         Self {
             catalog,
@@ -128,7 +149,7 @@ impl App {
             engine,
             view,
             library_mode: LibraryMode::Grid,
-            grid: grid::GridState::default(),
+            grid: grid_state,
             loupe: loupe::LoupeState::default(),
             import,
             config,
@@ -161,6 +182,7 @@ impl App {
                 EditParams::default()
             }
         };
+        let had_saved_edit = matches!(self.catalog.load_edit(id), Ok(Some(_)));
         self.current = Some(CurrentImage {
             id,
             kind: rec.kind,
@@ -169,6 +191,8 @@ impl App {
             params,
             dirty_since: None,
             loading: true,
+            had_saved_edit,
+            as_shot: None,
         });
         self.rendered = None;
         self.loupe.reset_view();
@@ -228,6 +252,7 @@ impl App {
                     image_id,
                     generation,
                     image,
+                    is_final,
                 } => {
                     if generation != self.decode_generation {
                         continue; // stale
@@ -236,8 +261,26 @@ impl App {
                     if cur.id != image_id {
                         continue;
                     }
-                    cur.loading = false;
+                    cur.loading = !is_final;
                     cur.rendered_params = None; // force re-render
+
+                    if let Some(as_shot) = image.as_shot {
+                        cur.as_shot = Some(as_shot);
+                        // A RAW opened for the first time adopts the As-Shot
+                        // values so the sliders show real Kelvin numbers and
+                        // the render starts at identity.
+                        if !cur.had_saved_edit
+                            && cur.params.wb_temp
+                                == crate::engine::params::TEMP_DEFAULT
+                            && cur.params.wb_tint == 0.0
+                            && cur.params == cur.saved_params
+                        {
+                            cur.params.wb_temp = as_shot.temp;
+                            cur.params.wb_tint = as_shot.tint;
+                            cur.saved_params = cur.params.clone();
+                        }
+                    }
+
                     if let Some(engine) = &mut self.engine {
                         match &image.pixels {
                             FullPixels::Srgb8(rgba) => engine.set_source(
@@ -348,8 +391,8 @@ impl App {
         if cur.rendered_params.as_ref() == Some(&cur.params) {
             return;
         }
-        // JPEGs (and RAW previews for now) are balanced to D65.
-        self.rendered = engine.render(&cur.params, 6500.0, 0.0);
+        let (ref_temp, ref_tint) = cur.ref_wb();
+        self.rendered = engine.render(&cur.params, ref_temp, ref_tint);
         cur.rendered_params = Some(cur.params.clone());
     }
 }
@@ -426,13 +469,18 @@ impl eframe::App for App {
                     .resizable(true)
                     .show(ui, |ui| {
                         if let Some(cur) = &mut self.current {
+                            let as_shot = cur.as_shot;
                             let resp = develop_panel::show(
                                 ui,
                                 &mut cur.params,
-                                cur.kind == FileKind::Raw,
+                                as_shot.map(|w| (w.temp, w.tint)),
                             );
                             if resp.reset {
                                 cur.params = EditParams::default();
+                                if let Some(w) = as_shot {
+                                    cur.params.wb_temp = w.temp;
+                                    cur.params.wb_tint = w.tint;
+                                }
                             }
                             if resp.changed || resp.reset {
                                 cur.dirty_since = Some(Instant::now());

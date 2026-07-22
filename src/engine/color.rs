@@ -132,9 +132,103 @@ pub fn wb_matrix(temp: f32, tint: f32, ref_temp: f32, ref_tint: f32) -> Mat3 {
     out
 }
 
+fn invert3(m: &[[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
+    let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let inv_det = 1.0 / det;
+    let mut inv = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            let (a, b, c, d) = (
+                m[(j + 1) % 3][(i + 1) % 3],
+                m[(j + 1) % 3][(i + 2) % 3],
+                m[(j + 2) % 3][(i + 1) % 3],
+                m[(j + 2) % 3][(i + 2) % 3],
+            );
+            inv[i][j] = (a * d - b * c) * inv_det;
+        }
+    }
+    Some(inv)
+}
+
+/// xy → CIE 1960 uv.
+fn xy_to_uv(x: f64, y: f64) -> (f64, f64) {
+    let denom = -2.0 * x + 12.0 * y + 3.0;
+    (4.0 * x / denom, 6.0 * y / denom)
+}
+
+/// Estimate the As-Shot (temp, tint) from LibRaw's camera WB multipliers and
+/// camera→XYZ matrix. Returns None if the metadata is degenerate.
+pub fn as_shot_wb(cam_mul: [f32; 4], cam_xyz: [[f32; 3]; 4]) -> Option<(f32, f32)> {
+    if cam_mul[0] <= 0.0 || cam_mul[1] <= 0.0 || cam_mul[2] <= 0.0 {
+        return None;
+    }
+    // A neutral patch under the shot illuminant has camera RGB ∝ 1/cam_mul.
+    let cam_neutral = [
+        1.0 / cam_mul[0] as f64,
+        1.0 / cam_mul[1] as f64,
+        1.0 / cam_mul[2] as f64,
+    ];
+    // cam_xyz maps XYZ → camera RGB (rows R,G,B).
+    let m = [
+        [cam_xyz[0][0] as f64, cam_xyz[0][1] as f64, cam_xyz[0][2] as f64],
+        [cam_xyz[1][0] as f64, cam_xyz[1][1] as f64, cam_xyz[1][2] as f64],
+        [cam_xyz[2][0] as f64, cam_xyz[2][1] as f64, cam_xyz[2][2] as f64],
+    ];
+    let inv = invert3(&m)?;
+    let xyz = mat_vec(&inv, cam_neutral);
+    let sum = xyz[0] + xyz[1] + xyz[2];
+    if !(sum.is_finite() && sum > 0.0) {
+        return None;
+    }
+    let (x, y) = (xyz[0] / sum, xyz[1] / sum);
+
+    // McCamy's CCT approximation.
+    let n = (x - 0.3320) / (0.1858 - y);
+    let cct = 449.0 * n * n * n + 3525.0 * n * n + 6823.3 * n + 5520.33;
+    if !(1500.0..=60000.0).contains(&cct) {
+        return None;
+    }
+    let cct = cct.clamp(TEMP_MIN_F64, TEMP_MAX_F64);
+
+    // Duv relative to the same locus wb_matrix uses, so slider == estimate
+    // gives the identity.
+    let (lx, ly) = cct_to_xy(cct as f32);
+    let (_, lv) = xy_to_uv(lx, ly);
+    let (_, v) = xy_to_uv(x, y);
+    let tint = ((v - lv) * 3000.0).clamp(-150.0, 150.0);
+    Some((cct as f32, tint as f32))
+}
+
+const TEMP_MIN_F64: f64 = 2000.0;
+const TEMP_MAX_F64: f64 = 50000.0;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn as_shot_from_eos_rp_tungsten() {
+        // Values captured from IMG_4186.CR3 (indoor candlelight/tungsten):
+        // cam_mul strongly favors blue multiplication => low CCT estimate.
+        let cam_mul = [1208.0, 1024.0, 3246.0, 1024.0];
+        // EOS RP cam_xyz (from LibRaw's Colordata, scaled by 1e-4).
+        let cam_xyz = [
+            [0.8608, -0.2097, -0.1178],
+            [-0.5425, 1.3265, 0.2383],
+            [-0.1149, 0.1781, 0.5619],
+        ];
+        let cam_xyz4 = [cam_xyz[0], cam_xyz[1], cam_xyz[2], [0.0; 3]];
+        let (temp, tint) = as_shot_wb(cam_mul, cam_xyz4).unwrap();
+        assert!(
+            (2000.0..4500.0).contains(&temp),
+            "expected warm illuminant, got {temp}K tint {tint}"
+        );
+    }
 
     #[test]
     fn neutral_is_identity() {

@@ -29,7 +29,10 @@ pub enum JobResult {
     FullReady {
         image_id: i64,
         generation: u64,
-        image: crate::decode::full::FullImage,
+        image: std::sync::Arc<crate::decode::full::FullImage>,
+        /// False for the fast RAW preview phase; true once this is the best
+        /// available decode.
+        is_final: bool,
     },
     FullFailed {
         image_id: i64,
@@ -101,27 +104,110 @@ fn full_decode_worker(
     tx: Sender<JobResult>,
     ctx: egui::Context,
 ) {
-    while let Ok(mut req) = rx.recv() {
+    use crate::catalog::FileKind;
+    use crate::decode::full;
+    use std::sync::Arc;
+
+    // Small cache of final decodes so stepping between images is instant.
+    let mut cache: lru::LruCache<i64, Arc<full::FullImage>> =
+        lru::LruCache::new(std::num::NonZeroUsize::new(2).unwrap());
+    let mut carried: Option<FullDecodeRequest> = None;
+
+    loop {
+        let mut req = match carried.take() {
+            Some(r) => r,
+            None => match rx.recv() {
+                Ok(r) => r,
+                Err(_) => return,
+            },
+        };
         // Latest-wins: skip straight to the newest queued request.
         while let Ok(newer) = rx.try_recv() {
             req = newer;
         }
-        let result = match crate::decode::full::decode_full(&req.rec) {
-            Ok(image) => JobResult::FullReady {
-                image_id: req.rec.id,
-                generation: req.generation,
-                image,
-            },
-            Err(e) => JobResult::FullFailed {
-                image_id: req.rec.id,
-                generation: req.generation,
-                error: format!("{e:#}"),
-            },
+
+        let send = |result: JobResult| -> bool {
+            let ok = tx.send(result).is_ok();
+            ctx.request_repaint();
+            ok
         };
-        if tx.send(result).is_err() {
-            return;
+
+        if let Some(image) = cache.get(&req.rec.id) {
+            if !send(JobResult::FullReady {
+                image_id: req.rec.id,
+                generation: req.generation,
+                image: image.clone(),
+                is_final: true,
+            }) {
+                return;
+            }
+            continue;
         }
-        ctx.request_repaint();
+
+        match req.rec.kind {
+            FileKind::Jpeg => {
+                let result = match full::decode_preview(&req.rec) {
+                    Ok(image) => {
+                        let image = Arc::new(image);
+                        cache.put(req.rec.id, image.clone());
+                        JobResult::FullReady {
+                            image_id: req.rec.id,
+                            generation: req.generation,
+                            image,
+                            is_final: true,
+                        }
+                    }
+                    Err(e) => JobResult::FullFailed {
+                        image_id: req.rec.id,
+                        generation: req.generation,
+                        error: format!("{e:#}"),
+                    },
+                };
+                if !send(result) {
+                    return;
+                }
+            }
+            FileKind::Raw => {
+                // Phase 1: instant embedded preview.
+                if let Ok(preview) = full::decode_preview(&req.rec) {
+                    if !send(JobResult::FullReady {
+                        image_id: req.rec.id,
+                        generation: req.generation,
+                        image: Arc::new(preview),
+                        is_final: false,
+                    }) {
+                        return;
+                    }
+                }
+                // A newer request may have arrived while extracting the
+                // preview; if so skip the expensive linear decode.
+                if let Ok(newer) = rx.try_recv() {
+                    carried = Some(newer);
+                    continue;
+                }
+                // Phase 2: real linear decode.
+                let result = match full::decode_linear_raw(&req.rec) {
+                    Ok(image) => {
+                        let image = Arc::new(image);
+                        cache.put(req.rec.id, image.clone());
+                        JobResult::FullReady {
+                            image_id: req.rec.id,
+                            generation: req.generation,
+                            image,
+                            is_final: true,
+                        }
+                    }
+                    Err(e) => JobResult::FullFailed {
+                        image_id: req.rec.id,
+                        generation: req.generation,
+                        error: format!("{e:#}"),
+                    },
+                };
+                if !send(result) {
+                    return;
+                }
+            }
+        }
     }
 }
 

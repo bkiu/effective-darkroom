@@ -11,7 +11,11 @@ pub struct PanelResponse {
     pub reset: bool,
 }
 
-pub fn show(ui: &mut egui::Ui, params: &mut EditParams, is_raw: bool) -> PanelResponse {
+pub fn show(
+    ui: &mut egui::Ui,
+    params: &mut EditParams,
+    as_shot: Option<(f32, f32)>,
+) -> PanelResponse {
     let mut changed = false;
     let mut reset = false;
 
@@ -29,8 +33,18 @@ pub fn show(ui: &mut egui::Ui, params: &mut EditParams, is_raw: bool) -> PanelRe
             });
             ui.separator();
 
-            ui.label(egui::RichText::new("White Balance").strong());
-            let _ = is_raw; // As-Shot label handling arrives with RAW decode
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("White Balance").strong());
+                if let Some((temp, tint)) = as_shot {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("As Shot").clicked() {
+                            params.wb_temp = temp;
+                            params.wb_tint = tint;
+                            changed = true;
+                        }
+                    });
+                }
+            });
             changed |= slider(ui, "Temp", &mut params.wb_temp, TEMP_MIN..=TEMP_MAX, true);
             changed |= slider(ui, "Tint", &mut params.wb_tint, -150.0..=150.0, false);
 
