@@ -161,6 +161,11 @@ pub struct App {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        cc.egui_ctx.all_styles_mut(|style| {
+            style.spacing.button_padding = egui::vec2(10.0, 5.0);
+            style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+            style.spacing.menu_margin = egui::Margin::same(8);
+        });
 
         // Inter as the primary UI font, with egui's emoji fonts as fallback.
         let mut fonts = egui::FontDefinitions::default();
@@ -589,9 +594,15 @@ impl App {
             self.config.show_info_overlay = Some(self.show_info);
             self.config.save();
         }
-        if key_del && !self.grid.selection.is_empty() {
-            self.delete
-                .request(self.grid.selection.iter().copied().collect());
+        if key_del {
+            // In the grid the selection is deleted; in loupe/develop the
+            // current photo is (they're usually the same set).
+            let ids: Vec<i64> = if !self.grid.selection.is_empty() {
+                self.grid.selection.iter().copied().collect()
+            } else {
+                self.current.as_ref().map(|c| c.id).into_iter().collect()
+            };
+            self.delete.request(ids);
         }
         let (key_p, key_u, key_x) = ctx.input(|i| {
             (
@@ -678,12 +689,16 @@ impl App {
             }
         }
 
-        // Refresh state.
-        if self
+        // Refresh state. Remember where we were so loupe/develop can advance
+        // to the next photo instead of going blank.
+        let deleted_current = self
             .current
             .as_ref()
-            .is_some_and(|c| ids.contains(&c.id))
-        {
+            .is_some_and(|c| ids.contains(&c.id));
+        let prior_index = self.current.as_ref().and_then(|c| {
+            self.visible.iter().position(|r| r.id == c.id)
+        });
+        if deleted_current {
             self.current = None;
             self.rendered = None;
             if let Some(engine) = &mut self.engine {
@@ -699,6 +714,19 @@ impl App {
             Err(e) => tracing::error!("reload images: {e:#}"),
         }
         self.reload_collections();
+
+        let in_single_view = self.view == View::Develop
+            || (self.view == View::Library && self.library_mode == LibraryMode::Loupe);
+        if deleted_current && in_single_view {
+            self.ensure_visible();
+            if let Some(idx) = prior_index {
+                let idx = idx.min(self.visible.len().saturating_sub(1));
+                if let Some(rec) = self.visible.get(idx) {
+                    let id = rec.id;
+                    self.set_current(id);
+                }
+            }
+        }
     }
 
     /// Apply the copied develop settings to every selected image.
@@ -723,11 +751,19 @@ impl App {
     /// Left side panel: collection list with create/delete.
     fn show_collections_panel(&mut self, ui: &mut egui::Ui) {
         egui::Panel::left("collections")
-            .default_size(200.0)
+            .default_size(210.0)
             .resizable(true)
             .show(ui, |ui| {
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(10, 10))
+                    .show(ui, |ui| {
+                        self.collections_panel_contents(ui);
+                    });
+            });
+    }
+
+    fn collections_panel_contents(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Collections").strong());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.small_button("+").on_hover_text("New collection").clicked()
@@ -738,7 +774,9 @@ impl App {
                         }
                     });
                 });
+                ui.add_space(4.0);
                 ui.separator();
+                ui.add_space(6.0);
 
                 let total = self.images.len();
                 if ui
@@ -817,7 +855,6 @@ impl App {
                         self.new_collection_name = None;
                     }
                 }
-            });
     }
 
     /// Flag filter row above the grid.
