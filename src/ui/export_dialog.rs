@@ -147,7 +147,7 @@ impl ExportDialog {
                 match self.prefs.dest() {
                     Some(dest) => {
                         ui.label(
-                            egui::RichText::new(format!("→ {}", dest.display()))
+                            egui::RichText::new(format!("Saving to: {}", dest.display()))
                                 .weak()
                                 .small(),
                         );

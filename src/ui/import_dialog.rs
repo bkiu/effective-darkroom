@@ -260,7 +260,7 @@ impl ImportDialog {
         };
         let ready = scan_source.is_some() && self.dest_root.is_some();
         if ui
-            .add_enabled(ready, egui::Button::new("Next: choose photos →"))
+            .add_enabled(ready, egui::Button::new("Next: choose photos…"))
             .clicked()
         {
             self.last_outcome = None;
@@ -276,7 +276,7 @@ impl ImportDialog {
 
     fn pick_ui(&mut self, ui: &mut egui::Ui, action: &mut DialogAction) {
         ui.horizontal(|ui| {
-            if ui.button("← Back").clicked() {
+            if ui.button("Back").clicked() {
                 self.stage = Stage::Configure;
                 self.reset_picker();
                 return;
@@ -541,7 +541,7 @@ impl ImportDialog {
                 let mut remove: Option<usize> = None;
                 for (i, s) in self.sources.iter().enumerate() {
                     ui.horizontal(|ui| {
-                        if ui.small_button("✕").clicked() {
+                        if ui.small_button("✖").clicked() {
                             remove = Some(i);
                         }
                         ui.label(s.display().to_string());

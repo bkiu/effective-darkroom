@@ -700,7 +700,7 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Collections").strong());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("＋").on_hover_text("New collection").clicked()
+                        if ui.small_button("+").on_hover_text("New collection").clicked()
                             && self.new_collection_name.is_none()
                         {
                             self.new_collection_name = Some(String::new());
@@ -780,8 +780,8 @@ impl App {
             ui.label(egui::RichText::new("Show:").weak());
             for (label, on, hover) in [
                 ("⚑", &mut self.filter_pick, "Picked"),
-                ("▢", &mut self.filter_unflagged, "Unflagged"),
-                ("✕", &mut self.filter_reject, "Rejected"),
+                ("⚐", &mut self.filter_unflagged, "Unflagged"),
+                ("✖", &mut self.filter_reject, "Rejected"),
             ] {
                 if ui
                     .selectable_label(*on, label)
@@ -855,7 +855,7 @@ impl App {
         }
         let mb = rec.file_size as f64 / (1024.0 * 1024.0);
         lines.push(format!(
-            "{}×{}  ·  {:.1} MB  ·  {}",
+            "{} x {}  ·  {:.1} MB  ·  {}",
             rec.width,
             rec.height,
             mb,

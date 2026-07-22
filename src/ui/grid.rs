@@ -87,7 +87,7 @@ pub fn show(
     if images.is_empty() {
         ui.centered_and_justified(|ui| {
             ui.label(
-                egui::RichText::new("Library is empty — use Import… to add photos")
+                egui::RichText::new("Library is empty. Use Import… to add photos")
                     .weak()
                     .size(15.0),
             );
@@ -124,7 +124,7 @@ pub fn draw_flag_badge(painter: &egui::Painter, rect: Rect, flag: Flag) {
     let (glyph, color) = match flag {
         Flag::Unflagged => return,
         Flag::Pick => ("⚑", Color32::from_rgb(140, 220, 140)),
-        Flag::Reject => ("✕", Color32::from_rgb(235, 100, 90)),
+        Flag::Reject => ("✖", Color32::from_rgb(235, 100, 90)),
     };
     let badge = Rect::from_min_size(rect.min + Vec2::splat(5.0), Vec2::splat(18.0));
     painter.rect_filled(badge, 4.0, Color32::from_black_alpha(170));
@@ -242,7 +242,7 @@ fn cell(
             grid_response.set_flag = Some(Flag::Unflagged);
             ui.close();
         }
-        if ui.button("✕ Reject").clicked() {
+        if ui.button("✖ Reject").clicked() {
             retarget(state);
             grid_response.set_flag = Some(Flag::Reject);
             ui.close();
@@ -264,7 +264,7 @@ fn cell(
             });
         }
         if let Some(name) = gctx.viewing_collection {
-            if ui.button(format!("Remove from “{name}”")).clicked() {
+            if ui.button(format!("Remove from '{name}'")).clicked() {
                 retarget(state);
                 grid_response.remove_from_collection = true;
                 ui.close();
