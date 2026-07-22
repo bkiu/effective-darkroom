@@ -156,9 +156,16 @@ impl ImportDialog {
     pub fn on_import_done(&mut self, outcome: ImportOutcome) {
         self.progress = None;
         self.import_cancel = None;
-        self.last_outcome = Some(outcome);
         self.stage = Stage::Configure;
         self.reset_picker();
+        // Close on clean completion; stay open only to show errors.
+        if outcome.errors.is_empty() {
+            self.open = false;
+            self.last_outcome = None;
+            self.sources.clear();
+        } else {
+            self.last_outcome = Some(outcome);
+        }
     }
 
     /// Show the dialog; returns what the app should start this frame.
