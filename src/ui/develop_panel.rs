@@ -67,8 +67,9 @@ pub fn show(
             changed |= slider(ui, "Temp", &mut params.wb_temp, TEMP_MIN..=TEMP_MAX, true);
             changed |= slider(ui, "Tint", &mut params.wb_tint, -150.0..=150.0, false);
 
-            ui.add_space(8.0);
+            ui.add_space(12.0);
             ui.label(egui::RichText::new("Tone").strong());
+            ui.add_space(4.0);
             changed |= slider(ui, "Exposure", &mut params.exposure, -5.0..=5.0, false);
             changed |= slider(ui, "Contrast", &mut params.contrast, -100.0..=100.0, false);
             changed |= slider(ui, "Highlights", &mut params.highlights, -100.0..=100.0, false);
@@ -76,8 +77,9 @@ pub fn show(
             changed |= slider(ui, "Whites", &mut params.whites, -100.0..=100.0, false);
             changed |= slider(ui, "Blacks", &mut params.blacks, -100.0..=100.0, false);
 
-            ui.add_space(8.0);
+            ui.add_space(12.0);
             ui.label(egui::RichText::new("Presence").strong());
+            ui.add_space(4.0);
             changed |= slider(ui, "Texture", &mut params.texture, -100.0..=100.0, false);
             changed |= slider(ui, "Clarity", &mut params.clarity, -100.0..=100.0, false);
             changed |= slider(ui, "Dehaze", &mut params.dehaze, -100.0..=100.0, false);
@@ -85,8 +87,9 @@ pub fn show(
             changed |= slider(ui, "Vibrance", &mut params.vibrance, -100.0..=100.0, false);
             changed |= slider(ui, "Saturation", &mut params.saturation, -100.0..=100.0, false);
 
-            ui.add_space(8.0);
+            ui.add_space(12.0);
             ui.label(egui::RichText::new("Detail").strong());
+            ui.add_space(4.0);
             changed |= slider(ui, "Color NR", &mut params.color_nr, 0.0..=100.0, false);
 
             ui.add_space(10.0);

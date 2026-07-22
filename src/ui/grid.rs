@@ -74,6 +74,8 @@ pub struct GridContext<'a> {
     pub collections: &'a [Collection],
     /// Set when the grid is showing a collection (enables "Remove from…").
     pub viewing_collection: Option<&'a str>,
+    /// Whole library is empty (vs. just the current filter matching nothing).
+    pub library_empty: bool,
 }
 
 pub fn show(
@@ -86,11 +88,12 @@ pub fn show(
     let mut response = GridResponse::default();
     if images.is_empty() {
         ui.centered_and_justified(|ui| {
-            ui.label(
-                egui::RichText::new("Library is empty. Use Import… to add photos")
-                    .weak()
-                    .size(15.0),
-            );
+            let msg = if gctx.library_empty {
+                "Library is empty. Use Import… to add photos"
+            } else {
+                "No photos match the current filter"
+            };
+            ui.label(egui::RichText::new(msg).weak().size(15.0));
         });
         return response;
     }
@@ -202,6 +205,13 @@ fn cell(
             rect,
             4.0,
             egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
+            egui::StrokeKind::Inside,
+        );
+    } else if response.hovered() {
+        painter.rect_stroke(
+            rect,
+            4.0,
+            egui::Stroke::new(1.0, Color32::from_gray(90)),
             egui::StrokeKind::Inside,
         );
     }

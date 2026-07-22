@@ -39,6 +39,7 @@ impl DeleteDialog {
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
+                ui.add_space(4.0);
                 ui.label(format!(
                     "Delete {n} photo{}?",
                     if n == 1 { "" } else { "s" }
@@ -51,7 +52,7 @@ impl DeleteDialog {
                     .weak()
                     .small(),
                 );
-                ui.add_space(8.0);
+                ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     if ui.button("Remove from library").clicked() {
                         action = DeleteAction::RemoveFromLibrary;

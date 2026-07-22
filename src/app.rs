@@ -860,13 +860,21 @@ impl App {
     /// Flag filter row above the grid.
     fn show_filter_row(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
+        let (n_pick, n_reject) = self.images.iter().fold((0, 0), |(p, r), rec| {
+            match rec.flag {
+                Flag::Pick => (p + 1, r),
+                Flag::Reject => (p, r + 1),
+                Flag::Unflagged => (p, r),
+            }
+        });
+        let n_unflagged = self.images.len() - n_pick - n_reject;
         ui.horizontal(|ui| {
             ui.add_space(14.0);
             ui.label(egui::RichText::new("Show:").weak());
             for (label, on, hover) in [
-                ("⚑", &mut self.filter_pick, "Picked"),
-                ("⚐", &mut self.filter_unflagged, "Unflagged"),
-                ("✖", &mut self.filter_reject, "Rejected"),
+                ("⚑", &mut self.filter_pick, format!("Picked ({n_pick})")),
+                ("⚐", &mut self.filter_unflagged, format!("Unflagged ({n_unflagged})")),
+                ("✖", &mut self.filter_reject, format!("Rejected ({n_reject})")),
             ] {
                 if ui
                     .selectable_label(*on, label)
@@ -947,6 +955,67 @@ impl App {
             rec.kind.as_str().to_uppercase()
         ));
         Some(lines)
+    }
+
+    /// Toolbar above the filmstrip in the single-image views: flag buttons
+    /// (current state highlighted) and delete.
+    fn show_loupe_toolbar(&mut self, ui: &mut egui::Ui) {
+        let Some(cur_id) = self.current.as_ref().map(|c| c.id) else {
+            return;
+        };
+        let flag = self
+            .images
+            .iter()
+            .find(|r| r.id == cur_id)
+            .map(|r| r.flag)
+            .unwrap_or_default();
+
+        let mut set: Option<Flag> = None;
+        let mut delete = false;
+        egui::Panel::bottom("loupe_toolbar").show(ui, |ui| {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.add_space(14.0);
+                for (label, value, hover) in [
+                    ("⚑ Pick", Flag::Pick, "Flag as pick (P)"),
+                    ("⚐ Unflag", Flag::Unflagged, "Remove flag (U)"),
+                    ("✖ Reject", Flag::Reject, "Flag as reject (X)"),
+                ] {
+                    let active = flag == value;
+                    if ui
+                        .selectable_label(active, label)
+                        .on_hover_text(hover)
+                        .clicked()
+                        && !active
+                    {
+                        set = Some(value);
+                    }
+                }
+                ui.separator();
+                if ui
+                    .button(egui::RichText::new("🗑 Delete").color(
+                        egui::Color32::from_rgb(235, 130, 120),
+                    ))
+                    .on_hover_text("Delete this photo (Del)")
+                    .clicked()
+                {
+                    delete = true;
+                }
+            });
+            ui.add_space(4.0);
+        });
+
+        if let Some(flag) = set {
+            self.set_flag_selection(flag);
+        }
+        if delete {
+            let ids: Vec<i64> = if !self.grid.selection.is_empty() {
+                self.grid.selection.iter().copied().collect()
+            } else {
+                vec![cur_id]
+            };
+            self.delete.request(ids);
+        }
     }
 
     /// Bottom filmstrip for the single-image views; switches images on click.
@@ -1138,6 +1207,7 @@ impl eframe::App for App {
                                 can_paste: self.copied_params.is_some(),
                                 collections: &self.collections,
                                 viewing_collection: viewing_collection.as_deref(),
+                                library_empty: self.images.is_empty(),
                             };
                             let resp = grid::show(
                                 ui,
@@ -1191,6 +1261,7 @@ impl eframe::App for App {
                         }
                         LibraryMode::Loupe => {
                             self.show_filmstrip(ui);
+                            self.show_loupe_toolbar(ui);
                             self.maybe_render();
                             let loading =
                                 self.current.as_ref().is_some_and(|c| c.loading);
@@ -1254,6 +1325,7 @@ impl eframe::App for App {
                     });
                 egui::CentralPanel::default().show(ui, |ui| {
                     self.show_filmstrip(ui);
+                    self.show_loupe_toolbar(ui);
                     self.maybe_render();
                     let loading = self.current.as_ref().is_some_and(|c| c.loading);
                     let info = self.info_lines();
