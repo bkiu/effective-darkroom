@@ -12,6 +12,7 @@
 
 pub mod color;
 pub mod curve;
+pub mod export;
 pub mod params;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -95,8 +96,6 @@ struct Aux {
     bg_down: wgpu::BindGroup,
     bg_h_8: wgpu::BindGroup,
     bg_v_8: wgpu::BindGroup,
-    half_size: (u32, u32),
-    eighth_size: (u32, u32),
 }
 
 struct HistReadback {
@@ -184,6 +183,12 @@ impl RenderEngine {
     /// Engine without an egui renderer, for export and headless tools.
     pub fn new_headless(device: wgpu::Device, queue: wgpu::Queue) -> Self {
         Self::build(device, queue, None)
+    }
+
+    /// Clones of the underlying device/queue (e.g. to build an export engine
+    /// sharing the GUI's GPU).
+    pub fn device_queue(&self) -> (wgpu::Device, wgpu::Queue) {
+        (self.device.clone(), self.queue.clone())
     }
 
     fn build(
@@ -593,8 +598,6 @@ impl RenderEngine {
             bg_down,
             bg_h_8,
             bg_v_8,
-            half_size: (hw, hh),
-            eighth_size: (ew, eh),
         });
     }
 

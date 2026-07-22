@@ -10,7 +10,8 @@
     non_upper_case_globals,
     dead_code,
     improper_ctypes,
-    unnecessary_transmutes
+    unnecessary_transmutes,
+    clippy::all
 )]
 mod sys {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));

@@ -14,7 +14,7 @@ impl FileKind {
         }
     }
 
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s {
             "raw" => FileKind::Raw,
             _ => FileKind::Jpeg,

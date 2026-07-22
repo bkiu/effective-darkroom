@@ -2,7 +2,7 @@
 //! parametric tone function (contrast/highlights/shadows/whites/blacks) and
 //! composition of everything into per-channel LUTs.
 
-use crate::engine::params::{EditParams, ToneCurves};
+use crate::engine::params::EditParams;
 
 pub const LUT_SIZE: usize = 1024;
 

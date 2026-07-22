@@ -45,6 +45,12 @@ pub enum JobResult {
         file_name: String,
     },
     ImportDone(ImportOutcome),
+    ExportProgress {
+        current: usize,
+        total: usize,
+        file_name: String,
+    },
+    ExportDone(crate::engine::export::ExportOutcome),
 }
 
 pub struct Jobs {
@@ -96,6 +102,48 @@ impl Jobs {
 
     pub fn request_full_decode(&self, generation: u64, rec: ImageRecord) {
         let _ = self.full_tx.send(FullDecodeRequest { generation, rec });
+    }
+
+    /// Spawn a one-shot export job on its own thread with its own catalog
+    /// connection and a headless engine sharing the GUI's GPU device.
+    pub fn start_export(
+        &self,
+        spec: crate::engine::export::ExportSpec,
+        device: eframe::wgpu::Device,
+        queue: eframe::wgpu::Queue,
+        ctx: egui::Context,
+    ) {
+        let tx = self.results_tx.clone();
+        std::thread::Builder::new()
+            .name("export".into())
+            .spawn(move || {
+                let mut engine = crate::engine::RenderEngine::new_headless(device, queue);
+                let result = crate::catalog::Catalog::open_default()
+                    .and_then(|catalog| {
+                        crate::engine::export::run_blocking(
+                            &mut engine,
+                            &catalog,
+                            &spec,
+                            |cur, total, name| {
+                                let _ = tx.send(JobResult::ExportProgress {
+                                    current: cur,
+                                    total,
+                                    file_name: name.to_string(),
+                                });
+                                ctx.request_repaint();
+                            },
+                        )
+                    });
+                let outcome = result.unwrap_or_else(|e| {
+                    crate::engine::export::ExportOutcome {
+                        exported: 0,
+                        errors: vec![format!("export failed: {e:#}")],
+                    }
+                });
+                let _ = tx.send(JobResult::ExportDone(outcome));
+                ctx.request_repaint();
+            })
+            .expect("spawn export thread");
     }
 }
 

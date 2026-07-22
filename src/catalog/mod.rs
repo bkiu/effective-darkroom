@@ -114,7 +114,7 @@ impl Catalog {
                 id: r.get(0)?,
                 abs_path: PathBuf::from(r.get::<_, String>(1)?),
                 file_name: r.get(2)?,
-                kind: FileKind::from_str(&r.get::<_, String>(3)?),
+                kind: FileKind::parse(&r.get::<_, String>(3)?),
                 capture_ts: r.get(4)?,
                 imported_ts: r.get(5)?,
                 width: r.get(6)?,

@@ -191,10 +191,10 @@ pub fn show(
             }
         }
     }
-    if response.drag_stopped() || (!response.dragged() && !response.clicked()) {
-        if !response.is_pointer_button_down_on() {
-            state.drag = None;
-        }
+    if (response.drag_stopped() || (!response.dragged() && !response.clicked()))
+        && !response.is_pointer_button_down_on()
+    {
+        state.drag = None;
     }
     // Double-click an interior point to remove it.
     if response.double_clicked() {

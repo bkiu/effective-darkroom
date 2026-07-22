@@ -53,7 +53,21 @@ impl GridState {
     }
 }
 
-pub fn show(ui: &mut egui::Ui, state: &mut GridState, images: &[ImageRecord], jobs: &Jobs) {
+#[derive(Default)]
+pub struct GridResponse {
+    /// User chose "Paste settings" from a cell context menu; apply the copied
+    /// params to the whole selection.
+    pub paste_to_selection: bool,
+}
+
+pub fn show(
+    ui: &mut egui::Ui,
+    state: &mut GridState,
+    images: &[ImageRecord],
+    jobs: &Jobs,
+    can_paste: bool,
+) -> GridResponse {
+    let mut response = GridResponse::default();
     if images.is_empty() {
         ui.centered_and_justified(|ui| {
             ui.label(
@@ -62,7 +76,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut GridState, images: &[ImageRecord], jo
                     .size(15.0),
             );
         });
-        return;
+        return response;
     }
 
     let avail = ui.available_width();
@@ -81,14 +95,23 @@ pub fn show(ui: &mut egui::Ui, state: &mut GridState, images: &[ImageRecord], jo
                         if idx >= images.len() {
                             break;
                         }
-                        cell(ui, state, images, idx, jobs);
+                        cell(ui, state, images, idx, jobs, can_paste, &mut response);
                     }
                 });
             }
         });
+    response
 }
 
-fn cell(ui: &mut egui::Ui, state: &mut GridState, images: &[ImageRecord], idx: usize, jobs: &Jobs) {
+fn cell(
+    ui: &mut egui::Ui,
+    state: &mut GridState,
+    images: &[ImageRecord],
+    idx: usize,
+    jobs: &Jobs,
+    can_paste: bool,
+    grid_response: &mut GridResponse,
+) {
     let rec = &images[idx];
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(CELL), Sense::click());
     if !ui.is_rect_visible(rect) {
@@ -147,6 +170,24 @@ fn cell(ui: &mut egui::Ui, state: &mut GridState, images: &[ImageRecord], idx: u
         "{}\n{} {}",
         rec.file_name, rec.camera_make, rec.camera_model
     ));
+
+    response.context_menu(|ui| {
+        let n = state.selection.len().max(1);
+        if ui
+            .add_enabled(
+                can_paste,
+                egui::Button::new(format!("Paste settings to {n} selected")),
+            )
+            .clicked()
+        {
+            if !state.selection.contains(&rec.id) {
+                state.selection.clear();
+                state.selection.insert(rec.id);
+            }
+            grid_response.paste_to_selection = true;
+            ui.close();
+        }
+    });
 
     if response.double_clicked() {
         state.activated = Some(rec.id);

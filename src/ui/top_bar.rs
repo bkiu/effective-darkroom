@@ -4,10 +4,14 @@ use crate::app::View;
 /// right, like Lightroom's module picker.
 pub struct TopBarAction {
     pub open_import: bool,
+    pub open_export: bool,
 }
 
-pub fn show(ui: &mut egui::Ui, view: &mut View) -> TopBarAction {
-    let mut action = TopBarAction { open_import: false };
+pub fn show(ui: &mut egui::Ui, view: &mut View, selection_count: usize) -> TopBarAction {
+    let mut action = TopBarAction {
+        open_import: false,
+        open_export: false,
+    };
     egui::Panel::top("top_bar").show(ui, |ui| {
         ui.add_space(2.0);
         ui.horizontal(|ui| {
@@ -20,6 +24,17 @@ pub fn show(ui: &mut egui::Ui, view: &mut View) -> TopBarAction {
             ui.separator();
             if ui.button("Import…").clicked() {
                 action.open_import = true;
+            }
+            let export_label = if selection_count > 1 {
+                format!("Export ({selection_count})…")
+            } else {
+                "Export…".to_string()
+            };
+            if ui
+                .add_enabled(selection_count > 0, egui::Button::new(export_label))
+                .clicked()
+            {
+                action.open_export = true;
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

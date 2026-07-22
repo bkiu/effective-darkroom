@@ -7,6 +7,8 @@ use crate::ui::tone_curve::{self, ToneCurveState};
 pub struct PanelResponse {
     pub changed: bool,
     pub reset: bool,
+    pub copy: bool,
+    pub paste: bool,
 }
 
 pub fn show(
@@ -15,9 +17,12 @@ pub fn show(
     as_shot: Option<(f32, f32)>,
     curve_state: &mut ToneCurveState,
     histogram: Option<&[[u32; 256]; 3]>,
+    can_paste: bool,
 ) -> PanelResponse {
     let mut changed = false;
     let mut reset = false;
+    let mut copy = false;
+    let mut paste = false;
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -28,6 +33,20 @@ pub fn show(
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Reset").clicked() {
                         reset = true;
+                    }
+                    if ui
+                        .add_enabled(can_paste, egui::Button::new("Paste"))
+                        .on_hover_text("Apply copied develop settings")
+                        .clicked()
+                    {
+                        paste = true;
+                    }
+                    if ui
+                        .button("Copy")
+                        .on_hover_text("Copy develop settings")
+                        .clicked()
+                    {
+                        copy = true;
                     }
                 });
             });
@@ -72,7 +91,12 @@ pub fn show(
             ui.add_space(8.0);
         });
 
-    PanelResponse { changed, reset }
+    PanelResponse {
+        changed,
+        reset,
+        copy,
+        paste,
+    }
 }
 
 fn slider(

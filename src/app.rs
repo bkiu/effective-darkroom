@@ -10,8 +10,8 @@ use crate::engine::params::{EditParams, PARAMS_VERSION};
 use crate::engine::{RenderEngine, SourcePixels};
 use crate::jobs::{JobResult, Jobs};
 use crate::ui::{
-    develop_panel, grid, import_dialog::ImportDialog, loupe, tone_curve::ToneCurveState,
-    top_bar,
+    develop_panel, export_dialog::ExportDialog, grid, import_dialog::ImportDialog, loupe,
+    tone_curve::ToneCurveState, top_bar,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,7 +63,6 @@ impl AppConfig {
 /// Editing state for the currently selected image.
 struct CurrentImage {
     id: i64,
-    kind: FileKind,
     params: EditParams,
     /// Params as last written to the catalog (for debounced saves).
     saved_params: EditParams,
@@ -103,8 +102,11 @@ pub struct App {
     grid: grid::GridState,
     loupe: loupe::LoupeState,
     import: ImportDialog,
+    export: ExportDialog,
     config: AppConfig,
     curve_state: ToneCurveState,
+    /// Develop settings captured by "Copy" for pasting onto other images.
+    copied_params: Option<EditParams>,
     current: Option<CurrentImage>,
     decode_generation: u64,
     /// Latest rendered output for the loupe.
@@ -160,8 +162,10 @@ impl App {
             grid: grid_state,
             loupe: loupe::LoupeState::default(),
             import,
+            export: ExportDialog::default(),
             config,
             curve_state: ToneCurveState::default(),
+            copied_params: None,
             current: None,
             decode_generation: 0,
             rendered: None,
@@ -196,7 +200,6 @@ impl App {
             .then(|| BaseCurve::for_camera(&rec.camera_model));
         self.current = Some(CurrentImage {
             id,
-            kind: rec.kind,
             saved_params: params.clone(),
             rendered_params: None,
             params,
@@ -344,6 +347,17 @@ impl App {
                         Err(e) => tracing::error!("reload images: {e:#}"),
                     }
                 }
+                JobResult::ExportProgress {
+                    current,
+                    total,
+                    file_name,
+                } => {
+                    self.export.progress = Some((current, total, file_name));
+                }
+                JobResult::ExportDone(outcome) => {
+                    self.export.progress = None;
+                    self.export.last_outcome = Some(outcome);
+                }
             }
         }
     }
@@ -400,6 +414,25 @@ impl App {
         }
     }
 
+    /// Apply the copied develop settings to every selected image.
+    fn paste_to_selection(&mut self) {
+        let Some(params) = self.copied_params.clone() else { return };
+        let json = params.to_json();
+        for &id in &self.grid.selection {
+            if let Err(e) = self.catalog.save_edit(id, PARAMS_VERSION, &json) {
+                tracing::error!("paste settings to {id}: {e:#}");
+            }
+            // Keep the in-memory state in sync if the current image was hit.
+            if let Some(cur) = &mut self.current {
+                if cur.id == id {
+                    cur.params = params.clone();
+                    cur.saved_params = params.clone();
+                    cur.dirty_since = None;
+                }
+            }
+        }
+    }
+
     /// Re-render through the engine if params changed or a new source landed.
     fn maybe_render(&mut self) {
         let Some(engine) = &mut self.engine else { return };
@@ -427,9 +460,12 @@ impl eframe::App for App {
         self.drain_results(&ctx);
         self.handle_keys(&ctx);
 
-        let action = top_bar::show(ui, &mut self.view);
+        let action = top_bar::show(ui, &mut self.view, self.grid.selection.len());
         if action.open_import {
             self.import.open = true;
+        }
+        if action.open_export {
+            self.export.open = true;
         }
         if self.view == View::Develop {
             self.ensure_current_from_selection();
@@ -440,6 +476,24 @@ impl eframe::App for App {
             self.config.save();
             self.import.progress = Some((0, 0, String::from("scanning…")));
             crate::importer::run(spec, self.jobs.results_tx.clone(), ctx.clone());
+        }
+
+        if let Some(mut spec) = self.export.show(&ctx, self.grid.selection.len()) {
+            // Export in library order; make sure pending edits are saved so
+            // the export renders what the user sees.
+            self.flush_edits();
+            spec.image_ids = self
+                .images
+                .iter()
+                .filter(|r| self.grid.selection.contains(&r.id))
+                .map(|r| r.id)
+                .collect();
+            if let Some(engine) = &self.engine {
+                let (device, queue) = engine.device_queue();
+                self.export.progress =
+                    Some((0, spec.image_ids.len(), String::from("starting…")));
+                self.jobs.start_export(spec, device, queue, ctx.clone());
+            }
         }
 
         // Grid double-click opens the loupe.
@@ -468,7 +522,16 @@ impl eframe::App for App {
                     }
                     match self.library_mode {
                         LibraryMode::Grid => {
-                            grid::show(ui, &mut self.grid, &self.images, &self.jobs);
+                            let resp = grid::show(
+                                ui,
+                                &mut self.grid,
+                                &self.images,
+                                &self.jobs,
+                                self.copied_params.is_some(),
+                            );
+                            if resp.paste_to_selection {
+                                self.paste_to_selection();
+                            }
                             if let Some(&id) = self.grid.selection.iter().next() {
                                 if self.grid.selection.len() == 1 {
                                     // Keep current in sync for E/D shortcuts.
@@ -507,7 +570,16 @@ impl eframe::App for App {
                                 as_shot.map(|w| (w.temp, w.tint)),
                                 &mut self.curve_state,
                                 histogram.as_deref(),
+                                self.copied_params.is_some(),
                             );
+                            if resp.copy {
+                                self.copied_params = Some(cur.params.clone());
+                            }
+                            if resp.paste {
+                                if let Some(p) = &self.copied_params {
+                                    cur.params = p.clone();
+                                }
+                            }
                             if resp.reset {
                                 cur.params = EditParams::default();
                                 if let Some(w) = as_shot {
@@ -515,7 +587,7 @@ impl eframe::App for App {
                                     cur.params.wb_tint = w.tint;
                                 }
                             }
-                            if resp.changed || resp.reset {
+                            if resp.changed || resp.reset || resp.paste {
                                 cur.dirty_since = Some(Instant::now());
                             }
                         } else {
