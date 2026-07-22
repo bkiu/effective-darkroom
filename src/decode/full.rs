@@ -30,11 +30,14 @@ pub struct FullImage {
     pub height: u32,
     pub pixels: FullPixels,
     pub as_shot: Option<AsShotWb>,
+    /// Capture metadata for the info overlay.
+    pub shot_info: crate::importer::metadata::CaptureInfo,
 }
 
 /// Fast first paint: the full JPEG for JPEG files, the embedded preview for
 /// RAWs.
 pub fn decode_preview(rec: &ImageRecord) -> Result<FullImage> {
+    let shot_info = crate::importer::metadata::read(&rec.abs_path, rec.kind);
     match rec.kind {
         FileKind::Jpeg => {
             let img = image::open(&rec.abs_path).context("decode jpeg")?;
@@ -44,6 +47,7 @@ pub fn decode_preview(rec: &ImageRecord) -> Result<FullImage> {
                 height: img.height(),
                 pixels: FullPixels::Srgb8(img.into_raw()),
                 as_shot: None,
+                shot_info,
             })
         }
         FileKind::Raw => {
@@ -69,6 +73,7 @@ pub fn decode_preview(rec: &ImageRecord) -> Result<FullImage> {
                 height: img.height(),
                 pixels: FullPixels::Srgb8(img.into_raw()),
                 as_shot,
+                shot_info,
             })
         }
     }
@@ -77,6 +82,7 @@ pub fn decode_preview(rec: &ImageRecord) -> Result<FullImage> {
 /// The real linear decode for RAW files (seconds for X-Trans; run on the
 /// decode thread).
 pub fn decode_linear_raw(rec: &ImageRecord) -> Result<FullImage> {
+    let shot_info = crate::importer::metadata::read(&rec.abs_path, rec.kind);
     let mut raw = libraw_ffi::RawFile::open(&rec.abs_path).context("open raw")?;
     let as_shot = color::as_shot_wb(raw.cam_mul(), raw.cam_xyz())
         .map(|(temp, tint)| AsShotWb { temp, tint });
@@ -87,6 +93,7 @@ pub fn decode_linear_raw(rec: &ImageRecord) -> Result<FullImage> {
         height: decoded.height,
         pixels: FullPixels::LinearF16(rgba),
         as_shot,
+        shot_info,
     })
 }
 

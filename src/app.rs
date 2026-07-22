@@ -45,6 +45,8 @@ pub struct AppConfig {
     pub ui_zoom: Option<f32>,
     /// Last-used export settings.
     pub export: Option<crate::ui::export_dialog::ExportPrefs>,
+    /// Show the EXIF info overlay in the loupe (toggled with I).
+    pub show_info_overlay: Option<bool>,
     /// Legacy field, migrated into `library_root`.
     pub last_import_dest: Option<PathBuf>,
 }
@@ -97,6 +99,8 @@ struct CurrentImage {
     /// True once the engine source is the linear RAW decode (the base curve
     /// only applies then; the embedded preview is already camera-toned).
     source_is_linear: bool,
+    /// Capture metadata for the info overlay (from the decode).
+    shot_info: Option<crate::importer::metadata::CaptureInfo>,
 }
 
 impl CurrentImage {
@@ -128,6 +132,8 @@ pub struct App {
     /// Develop settings captured by "Copy" for pasting onto other images.
     copied_params: Option<EditParams>,
     current: Option<CurrentImage>,
+    /// EXIF info overlay in the loupe, toggled with I.
+    show_info: bool,
     /// Scroll the filmstrip to the current photo on the next frame.
     strip_scroll_pending: bool,
     latest_zoom: f32,
@@ -206,6 +212,7 @@ impl App {
                 d
             },
             delete: DeleteDialog::default(),
+            show_info: config.show_info_overlay.unwrap_or(false),
             config,
             library_prompt_open,
             curve_state: ToneCurveState::default(),
@@ -262,6 +269,7 @@ impl App {
             as_shot: None,
             base_curve,
             source_is_linear: false,
+            shot_info: None,
         });
         self.rendered = None;
         self.loupe.reset_view();
@@ -333,6 +341,7 @@ impl App {
                     }
                     cur.loading = !is_final;
                     cur.rendered_params = None; // force re-render
+                    cur.shot_info = Some(image.shot_info.clone());
 
                     if let Some(as_shot) = image.as_shot {
                         cur.as_shot = Some(as_shot);
@@ -441,7 +450,7 @@ impl App {
         if ctx.egui_wants_keyboard_input() {
             return;
         }
-        let (left, right, key_g, key_e, key_d, key_del) = ctx.input(|i| {
+        let (left, right, key_g, key_e, key_d, key_del, key_i) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::ArrowLeft),
                 i.key_pressed(egui::Key::ArrowRight),
@@ -449,8 +458,14 @@ impl App {
                 i.key_pressed(egui::Key::E),
                 i.key_pressed(egui::Key::D),
                 i.key_pressed(egui::Key::Delete),
+                i.key_pressed(egui::Key::I),
             )
         });
+        if key_i {
+            self.show_info = !self.show_info;
+            self.config.show_info_overlay = Some(self.show_info);
+            self.config.save();
+        }
         if key_del && !self.grid.selection.is_empty() {
             self.delete
                 .request(self.grid.selection.iter().copied().collect());
@@ -561,6 +576,62 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Lines for the loupe's EXIF overlay (None when the overlay is off).
+    fn info_lines(&self) -> Option<Vec<String>> {
+        if !self.show_info {
+            return None;
+        }
+        let cur = self.current.as_ref()?;
+        let rec = self.images.iter().find(|r| r.id == cur.id)?;
+        let mut lines = vec![rec.file_name.clone()];
+
+        let camera = format!("{} {}", rec.camera_make, rec.camera_model)
+            .trim()
+            .to_string();
+        if !camera.is_empty() {
+            lines.push(camera);
+        }
+
+        if let Some(info) = &cur.shot_info {
+            let mut expo = Vec::new();
+            if info.shutter > 0.0 {
+                expo.push(if info.shutter >= 1.0 {
+                    format!("{:.1}s", info.shutter)
+                } else {
+                    format!("1/{}s", (1.0 / info.shutter).round() as u32)
+                });
+            }
+            if info.aperture > 0.0 {
+                expo.push(format!("f/{:.1}", info.aperture));
+            }
+            if info.iso > 0.0 {
+                expo.push(format!("ISO {}", info.iso as u32));
+            }
+            if info.focal_len > 0.0 {
+                expo.push(format!("{:.0}mm", info.focal_len));
+            }
+            if !expo.is_empty() {
+                lines.push(expo.join("  ·  "));
+            }
+        }
+
+        if let Some(ts) = rec.capture_ts {
+            use chrono::TimeZone;
+            if let Some(dt) = chrono::Local.timestamp_opt(ts, 0).earliest() {
+                lines.push(dt.format("%Y-%m-%d %H:%M:%S").to_string());
+            }
+        }
+        let mb = rec.file_size as f64 / (1024.0 * 1024.0);
+        lines.push(format!(
+            "{}×{}  ·  {:.1} MB  ·  {}",
+            rec.width,
+            rec.height,
+            mb,
+            rec.kind.as_str().to_uppercase()
+        ));
+        Some(lines)
     }
 
     /// Bottom filmstrip for the single-image views; switches images on click.
@@ -761,7 +832,14 @@ impl eframe::App for App {
                             self.maybe_render();
                             let loading =
                                 self.current.as_ref().is_some_and(|c| c.loading);
-                            loupe::show(ui, &mut self.loupe, self.rendered, loading);
+                            let info = self.info_lines();
+                            loupe::show(
+                                ui,
+                                &mut self.loupe,
+                                self.rendered,
+                                loading,
+                                info.as_deref(),
+                            );
                         }
                     }
                 });
@@ -816,7 +894,14 @@ impl eframe::App for App {
                     self.show_filmstrip(ui);
                     self.maybe_render();
                     let loading = self.current.as_ref().is_some_and(|c| c.loading);
-                    loupe::show(ui, &mut self.loupe, self.rendered, loading);
+                    let info = self.info_lines();
+                    loupe::show(
+                        ui,
+                        &mut self.loupe,
+                        self.rendered,
+                        loading,
+                        info.as_deref(),
+                    );
                 });
             }
         }

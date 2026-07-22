@@ -19,6 +19,12 @@ pub struct CaptureInfo {
     pub orientation: u32,
     pub make: String,
     pub model: String,
+    /// Exposure settings; 0.0 when unknown.
+    pub iso: f32,
+    /// Shutter time in seconds.
+    pub shutter: f32,
+    pub aperture: f32,
+    pub focal_len: f32,
 }
 
 pub fn read(path: &Path, kind: FileKind) -> CaptureInfo {
@@ -41,6 +47,10 @@ fn read_raw(path: &Path) -> CaptureInfo {
                 orientation: 0, // LibRaw output is already rotated
                 make: md.make,
                 model: md.model,
+                iso: md.iso,
+                shutter: md.shutter,
+                aperture: md.aperture,
+                focal_len: md.focal_len,
             }
         }
         Err(err) => {
@@ -78,6 +88,23 @@ fn read_jpeg(path: &Path) -> CaptureInfo {
     if let Some(f) = exif.get_field(Tag::Orientation, In::PRIMARY) {
         if let Some(v) = f.value.get_uint(0) {
             info.orientation = v;
+        }
+    }
+
+    let rational = |tag| -> f32 {
+        exif.get_field(tag, In::PRIMARY)
+            .and_then(|f| match &f.value {
+                Value::Rational(v) => v.first().map(|r| r.to_f64() as f32),
+                _ => None,
+            })
+            .unwrap_or(0.0)
+    };
+    info.shutter = rational(Tag::ExposureTime);
+    info.aperture = rational(Tag::FNumber);
+    info.focal_len = rational(Tag::FocalLength);
+    if let Some(f) = exif.get_field(Tag::PhotographicSensitivity, In::PRIMARY) {
+        if let Some(v) = f.value.get_uint(0) {
+            info.iso = v as f32;
         }
     }
 

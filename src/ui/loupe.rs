@@ -17,12 +17,14 @@ impl LoupeState {
     }
 }
 
-/// Draw the rendered image (if any) into the available space.
+/// Draw the rendered image (if any) into the available space, with an
+/// optional EXIF info overlay (lines of text, first line emphasized).
 pub fn show(
     ui: &mut egui::Ui,
     state: &mut LoupeState,
     tex: Option<(egui::TextureId, Vec2)>,
     loading: bool,
+    info: Option<&[String]>,
 ) {
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     ui.painter().rect_filled(rect, 0.0, Color32::from_gray(16));
@@ -87,11 +89,51 @@ pub fn show(
     }
     ui.painter().image(tex_id, draw_rect, uv, Color32::WHITE);
 
+    if let Some(lines) = info {
+        draw_info_overlay(ui, rect, lines);
+    }
+
     if loading {
         // A decode for this image is still in flight (e.g. RAW linear pass).
         ui.put(
             Rect::from_min_size(rect.min + Vec2::splat(8.0), Vec2::splat(20.0)),
             egui::Spinner::new().size(20.0),
         );
+    }
+}
+
+fn draw_info_overlay(ui: &egui::Ui, rect: Rect, lines: &[String]) {
+    let painter = ui.painter();
+    let margin = 14.0;
+    let pad = 10.0;
+    let title_font = egui::FontId::proportional(16.0);
+    let body_font = egui::FontId::proportional(13.0);
+    let line_gap = 4.0;
+
+    // Measure.
+    let mut galleys = Vec::new();
+    let mut size = Vec2::ZERO;
+    for (i, line) in lines.iter().enumerate() {
+        let font = if i == 0 { &title_font } else { &body_font };
+        let galley = painter.layout_no_wrap(
+            line.clone(),
+            font.clone(),
+            Color32::from_gray(if i == 0 { 240 } else { 205 }),
+        );
+        size.x = size.x.max(galley.size().x);
+        size.y += galley.size().y + if i > 0 { line_gap } else { 0.0 };
+        galleys.push(galley);
+    }
+
+    let bg = Rect::from_min_size(
+        rect.min + Vec2::splat(margin),
+        size + Vec2::splat(2.0 * pad),
+    );
+    painter.rect_filled(bg, 6.0, Color32::from_black_alpha(170));
+    let mut cursor = bg.min + Vec2::splat(pad);
+    for galley in galleys {
+        let h = galley.size().y;
+        painter.galley(cursor, galley, Color32::WHITE);
+        cursor.y += h + line_gap;
     }
 }
