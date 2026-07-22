@@ -1,15 +1,16 @@
 {
-  "_comment": "Fitted from Canon EOS RP reference pairs; refit with X100V RAF + Adobe JPEG pairs via examples/curve_fit.rs when available.",
+  "_comment": "Fitted from IMG_0162.RAF vs Adobe JPEG export via examples/curve_fit.rs (2026-07-22).",
   "baseline_ev": 0.0,
   "points": [
     [0.0, 0.0],
-    [0.1172, 0.1309],
-    [0.2422, 0.3744],
-    [0.3672, 0.6141],
-    [0.4922, 0.7858],
-    [0.6172, 0.8912],
-    [0.7422, 0.953],
-    [0.8672, 0.9818],
+    [0.0391, 0.0078],
+    [0.1484, 0.1269],
+    [0.2578, 0.3394],
+    [0.3672, 0.5654],
+    [0.4766, 0.7141],
+    [0.5859, 0.8345],
+    [0.6953, 0.9143],
+    [0.8047, 0.9608],
     [1.0, 1.0]
   ]
 }
