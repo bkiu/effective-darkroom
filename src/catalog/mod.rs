@@ -93,6 +93,16 @@ impl Catalog {
         Ok(n > 0)
     }
 
+    /// Any image with this original file name.
+    pub fn contains_name(&self, file_name: &str) -> Result<bool> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM images WHERE file_name = ?1",
+            params![file_name],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
     /// A file already imported from elsewhere: same name and size.
     pub fn contains_similar(&self, file_name: &str, file_size: u64) -> Result<bool> {
         let n: i64 = self.conn.query_row(

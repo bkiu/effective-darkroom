@@ -16,9 +16,12 @@ the Wayland/Vulkan runtime libraries.
 
 ## Features
 
-- **Import** RAW/JPEG from files or folders into a destination of your
-  choice, organized into `YYYY/MM-DD` folders by capture date. Copy or move.
-  Duplicates (same path, or same name + size) are skipped.
+- **Import** RAW/JPEG from files, folders, or a **USB-connected camera**
+  (PTP via libgphoto2; tested with the EOS RP). Photos are organized into
+  `YYYY/MM-DD` folders by capture date. Copy or move for file imports;
+  camera imports download only photos not already in the library and never
+  delete from the card. On first start the app asks where the library should
+  live; that folder is the default import destination from then on.
 - **Library**: virtualized thumbnail grid (click / ctrl / shift selection),
   loupe view with fit & 1:1 zoom and panning. Keys: `G` grid, `E` loupe,
   `D` develop, arrow keys to step between photos.

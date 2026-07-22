@@ -31,7 +31,11 @@ const SAVE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(500)
 
 /// Small persisted app config (not part of the catalog).
 #[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppConfig {
+    /// Default destination for imports; asked for once on first startup.
+    pub library_root: Option<PathBuf>,
+    /// Legacy field, migrated into `library_root`.
     pub last_import_dest: Option<PathBuf>,
 }
 
@@ -104,6 +108,8 @@ pub struct App {
     import: ImportDialog,
     export: ExportDialog,
     config: AppConfig,
+    /// First-run prompt asking where the library should live.
+    library_prompt_open: bool,
     curve_state: ToneCurveState,
     /// Develop settings captured by "Copy" for pasting onto other images.
     copied_params: Option<EditParams>,
@@ -126,7 +132,15 @@ impl App {
             tracing::error!("no wgpu render state; develop module disabled");
         }
 
-        let config = AppConfig::load();
+        let mut config = AppConfig::load();
+        // Migrate the pre-library_root config field.
+        if config.library_root.is_none() {
+            if let Some(dest) = config.last_import_dest.take() {
+                config.library_root = Some(dest);
+                config.save();
+            }
+        }
+
         let (catalog, images, startup_error) = match Catalog::open_default() {
             Ok(cat) => match cat.all_images() {
                 Ok(imgs) => (cat, imgs, None),
@@ -136,7 +150,8 @@ impl App {
         };
 
         let mut import = ImportDialog::default();
-        import.dest_root = config.last_import_dest.clone();
+        import.dest_root = config.library_root.clone();
+        let library_prompt_open = config.library_root.is_none();
 
         // Dev helpers (useful for automated screenshots/tests):
         // ED_STARTUP_VIEW=develop opens the develop module on startup;
@@ -164,6 +179,7 @@ impl App {
             import,
             export: ExportDialog::default(),
             config,
+            library_prompt_open,
             curve_state: ToneCurveState::default(),
             copied_params: None,
             current: None,
@@ -460,9 +476,40 @@ impl eframe::App for App {
         self.drain_results(&ctx);
         self.handle_keys(&ctx);
 
+        if self.library_prompt_open {
+            egui::Window::new("Welcome to Effective Darkroom")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(&ctx, |ui| {
+                    ui.label("Choose where your photo library should live.");
+                    ui.label(
+                        egui::RichText::new(
+                            "Imported photos are copied here into YYYY/MM-DD folders. \
+                             This becomes the default import destination.",
+                        )
+                        .weak()
+                        .small(),
+                    );
+                    ui.add_space(8.0);
+                    if ui.button("Choose library folder…").clicked() {
+                        if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                            self.config.library_root = Some(dir.clone());
+                            self.config.save();
+                            self.import.dest_root = Some(dir);
+                            self.library_prompt_open = false;
+                        }
+                    }
+                });
+        }
+
         let action = top_bar::show(ui, &mut self.view, self.grid.selection.len());
         if action.open_import {
             self.import.open = true;
+            // Default the destination to the library location.
+            if self.import.dest_root.is_none() {
+                self.import.dest_root = self.config.library_root.clone();
+            }
         }
         if action.open_export {
             self.export.open = true;
@@ -472,8 +519,10 @@ impl eframe::App for App {
         }
 
         if let Some(spec) = self.import.show(&ctx) {
-            self.config.last_import_dest = Some(spec.dest_root.clone());
-            self.config.save();
+            if self.config.library_root.is_none() {
+                self.config.library_root = Some(spec.dest_root.clone());
+                self.config.save();
+            }
             self.import.progress = Some((0, 0, String::from("scanning…")));
             crate::importer::run(spec, self.jobs.results_tx.clone(), ctx.clone());
         }

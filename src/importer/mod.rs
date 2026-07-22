@@ -4,6 +4,7 @@
 //! Runs on its own thread with its own catalog connection (WAL mode makes
 //! concurrent access safe); progress is streamed back over the results channel.
 
+pub mod camera;
 pub mod metadata;
 
 use std::path::{Path, PathBuf};
@@ -21,10 +22,18 @@ pub enum ImportMode {
 }
 
 #[derive(Debug, Clone)]
-pub struct ImportSpec {
+pub enum ImportSource {
     /// Files and/or directories chosen by the user.
-    pub sources: Vec<PathBuf>,
+    Paths(Vec<PathBuf>),
+    /// A USB-connected camera; new files on the card are downloaded.
+    Camera(camera::CameraDesc),
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportSpec {
+    pub source: ImportSource,
     pub dest_root: PathBuf,
+    /// Only applies to path imports; camera imports never delete from card.
     pub mode: ImportMode,
 }
 
@@ -89,10 +98,22 @@ pub fn run(
 
 pub fn run_blocking(
     spec: &ImportSpec,
-    mut progress: impl FnMut(usize, usize, &str),
+    progress: impl FnMut(usize, usize, &str),
 ) -> Result<ImportOutcome> {
     let catalog = Catalog::open_default().context("open catalog")?;
-    let files = scan_sources(&spec.sources);
+    match &spec.source {
+        ImportSource::Paths(paths) => import_paths(&catalog, spec, paths, progress),
+        ImportSource::Camera(desc) => import_camera(&catalog, spec, desc, progress),
+    }
+}
+
+fn import_paths(
+    catalog: &Catalog,
+    spec: &ImportSpec,
+    paths: &[PathBuf],
+    mut progress: impl FnMut(usize, usize, &str),
+) -> Result<ImportOutcome> {
+    let files = scan_sources(paths);
     let total = files.len();
     let mut outcome = ImportOutcome {
         imported: 0,
@@ -106,7 +127,7 @@ pub fn run_blocking(
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         progress(i + 1, total, &name);
-        match import_one(&catalog, spec, src) {
+        match import_one(catalog, spec.mode, &spec.dest_root, src) {
             Ok(ImportedFile::Added) => outcome.imported += 1,
             Ok(ImportedFile::Duplicate) => outcome.skipped_duplicates += 1,
             Err(e) => outcome.errors.push(format!("{name}: {e:#}")),
@@ -115,12 +136,73 @@ pub fn run_blocking(
     Ok(outcome)
 }
 
+fn import_camera(
+    catalog: &Catalog,
+    spec: &ImportSpec,
+    desc: &camera::CameraDesc,
+    mut progress: impl FnMut(usize, usize, &str),
+) -> Result<ImportOutcome> {
+    let mut outcome = ImportOutcome {
+        imported: 0,
+        skipped_duplicates: 0,
+        errors: Vec::new(),
+    };
+    progress(0, 0, "connecting to camera…");
+    let cam = camera::connect(desc)?;
+    progress(0, 0, "scanning card…");
+    let files = camera::list_card_files(&cam)?;
+    let total = files.len();
+
+    // Staging area inside the destination so the final move is a cheap
+    // same-filesystem rename.
+    let staging = spec
+        .dest_root
+        .join(format!(".incoming-{}", std::process::id()));
+    std::fs::create_dir_all(&staging).context("create staging dir")?;
+
+    for (i, file) in files.iter().enumerate() {
+        progress(i + 1, total, &file.name);
+        // Cheap dedupe before downloading: name known to the catalog and
+        // same size on card → already imported.
+        let known = catalog.contains_name(&file.name).unwrap_or(false)
+            && camera::file_size(&cam, file)
+                .map(|size| catalog.contains_similar(&file.name, size).unwrap_or(false))
+                .unwrap_or(false);
+        if known {
+            outcome.skipped_duplicates += 1;
+            continue;
+        }
+        let staged = staging.join(&file.name);
+        let result = camera::download(&cam, file, &staged).and_then(|()| {
+            import_one(catalog, ImportMode::Move, &spec.dest_root, &staged)
+        });
+        match result {
+            Ok(ImportedFile::Added) => outcome.imported += 1,
+            Ok(ImportedFile::Duplicate) => {
+                let _ = std::fs::remove_file(&staged);
+                outcome.skipped_duplicates += 1;
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&staged);
+                outcome.errors.push(format!("{}: {e:#}", file.name));
+            }
+        }
+    }
+    let _ = std::fs::remove_dir(&staging);
+    Ok(outcome)
+}
+
 enum ImportedFile {
     Added,
     Duplicate,
 }
 
-fn import_one(catalog: &Catalog, spec: &ImportSpec, src: &Path) -> Result<ImportedFile> {
+fn import_one(
+    catalog: &Catalog,
+    mode: ImportMode,
+    dest_root: &Path,
+    src: &Path,
+) -> Result<ImportedFile> {
     let kind = FileKind::from_path(src).context("unsupported file type")?;
     let file_size = std::fs::metadata(src).context("stat source")?.len();
     let file_name = src
@@ -136,13 +218,13 @@ fn import_one(catalog: &Catalog, spec: &ImportSpec, src: &Path) -> Result<Import
     let info = metadata::read(src, kind);
     let capture_ts = info.capture_ts.or_else(|| metadata::mtime_ts(src));
 
-    let dest_dir = spec.dest_root.join(date_folder(capture_ts));
+    let dest_dir = dest_root.join(date_folder(capture_ts));
     std::fs::create_dir_all(&dest_dir).context("create destination folder")?;
     let dest = unique_dest(&dest_dir, &file_name);
 
     // Already-in-place (re-importing the destination itself) would be caught
     // by contains_path above; a same-named different file gets a suffix.
-    match spec.mode {
+    match mode {
         ImportMode::Copy => {
             std::fs::copy(src, &dest).context("copy file")?;
         }

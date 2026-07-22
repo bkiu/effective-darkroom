@@ -25,6 +25,7 @@
 
           buildInputs = with pkgs; [
             libraw
+            libgphoto2
             libxkbcommon
             wayland
             libGL

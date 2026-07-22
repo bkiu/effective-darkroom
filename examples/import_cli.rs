@@ -6,7 +6,7 @@
 //! touching your real catalog.
 
 use effective_darkroom::catalog::Catalog;
-use effective_darkroom::importer::{run_blocking, ImportMode, ImportSpec};
+use effective_darkroom::importer::{run_blocking, ImportMode, ImportSource, ImportSpec};
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
@@ -16,7 +16,7 @@ fn main() -> anyhow::Result<()> {
 
     let outcome = run_blocking(
         &ImportSpec {
-            sources,
+            source: ImportSource::Paths(sources),
             dest_root,
             mode: ImportMode::Copy,
         },
