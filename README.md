@@ -23,8 +23,13 @@ the Wayland/Vulkan runtime libraries.
   delete from the card. On first start the app asks where the library should
   live; that folder is the default import destination from then on.
 - **Library**: virtualized thumbnail grid (click / ctrl / shift selection),
-  loupe view with fit & 1:1 zoom and panning. Keys: `G` grid, `E` loupe,
-  `D` develop, arrow keys to step between photos.
+  loupe view with fit & 1:1 zoom and panning, filmstrip in the single-image
+  views. Keys: `G` grid, `E` loupe, `D` develop, arrows to step, `I` EXIF
+  info overlay, `Delete` to remove/trash.
+- **Collections & flags**: named collections in the left panel (create with
+  ＋, add photos via right-click, click to filter); pick/reject flags with
+  `P` / `X` / `U` (picked photos show a green flag, rejects a red ✕ and a
+  dimmed thumbnail); a Show filter row narrows any view by flag status.
 - **Develop** (upper-right tab): White balance (Temp/Tint, As Shot for RAW),
   Exposure, Contrast, Highlights, Shadows, Whites, Blacks, Texture, Clarity,
   Dehaze, Vibrance, Saturation, plus a tone curve editor with draggable

@@ -70,6 +70,18 @@ pub fn show(
                             egui::StrokeKind::Inside,
                         );
                     }
+                    let dot = match rec.flag {
+                        crate::catalog::Flag::Pick => Some(Color32::from_rgb(140, 220, 140)),
+                        crate::catalog::Flag::Reject => Some(Color32::from_rgb(235, 100, 90)),
+                        crate::catalog::Flag::Unflagged => None,
+                    };
+                    if let Some(color) = dot {
+                        painter.circle_filled(
+                            rect.right_top() + Vec2::new(-7.0, 7.0),
+                            4.0,
+                            color,
+                        );
+                    }
                     if response.clicked() {
                         clicked = Some(rec.id);
                     }

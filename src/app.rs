@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
-use crate::catalog::{Catalog, FileKind, ImageRecord};
+use crate::catalog::{Catalog, Collection, FileKind, Flag, ImageRecord};
 use crate::decode::full::{AsShotWb, FullPixels};
 use crate::engine::curve::BaseCurve;
 use crate::engine::params::{EditParams, PARAMS_VERSION};
@@ -116,6 +116,19 @@ impl CurrentImage {
 pub struct App {
     catalog: Catalog,
     images: Vec<ImageRecord>,
+    /// Images passing the current collection + flag filters, in library
+    /// order. This is what the grid, filmstrip and arrow keys navigate.
+    visible: Vec<ImageRecord>,
+    visible_dirty: bool,
+    collections: Vec<Collection>,
+    /// None = All Photos.
+    active_collection: Option<i64>,
+    collection_members: std::collections::HashSet<i64>,
+    filter_pick: bool,
+    filter_unflagged: bool,
+    filter_reject: bool,
+    /// In-progress "new collection" name entry in the side panel.
+    new_collection_name: Option<String>,
     jobs: Jobs,
     engine: Option<RenderEngine>,
     view: View,
@@ -194,9 +207,19 @@ impl App {
             }
         }
 
+        let collections = catalog.list_collections().unwrap_or_default();
         Self {
             catalog,
             images,
+            visible: Vec::new(),
+            visible_dirty: true,
+            collections,
+            active_collection: None,
+            collection_members: Default::default(),
+            filter_pick: true,
+            filter_unflagged: true,
+            filter_reject: true,
+            new_collection_name: None,
             jobs: Jobs::new(cc.egui_ctx.clone()),
             engine,
             view,
@@ -226,8 +249,67 @@ impl App {
         }
     }
 
-    fn image_index(&self, id: i64) -> Option<usize> {
-        self.images.iter().position(|r| r.id == id)
+    /// Recompute the filtered view when images, filters or the active
+    /// collection changed.
+    fn ensure_visible(&mut self) {
+        if !self.visible_dirty {
+            return;
+        }
+        self.visible_dirty = false;
+        if let Some(cid) = self.active_collection {
+            self.collection_members = self.catalog.collection_image_ids(cid).unwrap_or_default();
+        }
+        let in_collection = |r: &ImageRecord| match self.active_collection {
+            Some(_) => self.collection_members.contains(&r.id),
+            None => true,
+        };
+        let passes_flag = |r: &ImageRecord| match r.flag {
+            Flag::Pick => self.filter_pick,
+            Flag::Unflagged => self.filter_unflagged,
+            Flag::Reject => self.filter_reject,
+        };
+        self.visible = self
+            .images
+            .iter()
+            .filter(|r| in_collection(r) && passes_flag(r))
+            .cloned()
+            .collect();
+        // Drop selection entries that are no longer visible.
+        let visible_ids: std::collections::HashSet<i64> =
+            self.visible.iter().map(|r| r.id).collect();
+        self.grid.selection.retain(|id| visible_ids.contains(id));
+    }
+
+    fn reload_collections(&mut self) {
+        self.collections = self.catalog.list_collections().unwrap_or_default();
+        if let Some(cid) = self.active_collection {
+            if !self.collections.iter().any(|c| c.id == cid) {
+                self.active_collection = None;
+            }
+        }
+        self.visible_dirty = true;
+    }
+
+    /// Flag the grid selection (falling back to the current image).
+    fn set_flag_selection(&mut self, flag: Flag) {
+        let ids: Vec<i64> = if self.grid.selection.is_empty() {
+            self.current.as_ref().map(|c| c.id).into_iter().collect()
+        } else {
+            self.grid.selection.iter().copied().collect()
+        };
+        if ids.is_empty() {
+            return;
+        }
+        if let Err(e) = self.catalog.set_flag(&ids, flag) {
+            tracing::error!("set flag: {e:#}");
+            return;
+        }
+        for rec in &mut self.images {
+            if ids.contains(&rec.id) {
+                rec.flag = flag;
+            }
+        }
+        self.visible_dirty = true;
     }
 
     /// Switch the selected/edited image, saving pending edits first.
@@ -302,17 +384,28 @@ impl App {
     }
 
     fn step_current(&mut self, delta: i64) {
+        self.ensure_visible();
         let Some(cur_id) = self.current.as_ref().map(|c| c.id) else {
-            // No current image: pick the first.
-            if let Some(first) = self.images.first() {
+            // No current image: pick the first visible.
+            if let Some(first) = self.visible.first() {
                 self.set_current(first.id);
             }
             return;
         };
-        if let Some(idx) = self.image_index(cur_id) {
-            let new_idx = (idx as i64 + delta).clamp(0, self.images.len() as i64 - 1);
-            let new_id = self.images[new_idx as usize].id;
-            self.set_current(new_id);
+        let idx = self.visible.iter().position(|r| r.id == cur_id);
+        match idx {
+            Some(idx) => {
+                let new_idx =
+                    (idx as i64 + delta).clamp(0, self.visible.len() as i64 - 1);
+                let new_id = self.visible[new_idx as usize].id;
+                self.set_current(new_id);
+            }
+            None => {
+                // Current image filtered out: jump to the first visible.
+                if let Some(first) = self.visible.first() {
+                    self.set_current(first.id);
+                }
+            }
         }
     }
 
@@ -408,6 +501,7 @@ impl App {
                         Ok(imgs) => self.images = imgs,
                         Err(e) => tracing::error!("reload images: {e:#}"),
                     }
+                    self.visible_dirty = true;
                 }
                 JobResult::ImportScanList {
                     generation,
@@ -470,6 +564,22 @@ impl App {
             self.delete
                 .request(self.grid.selection.iter().copied().collect());
         }
+        let (key_p, key_u, key_x) = ctx.input(|i| {
+            (
+                i.key_pressed(egui::Key::P),
+                i.key_pressed(egui::Key::U),
+                i.key_pressed(egui::Key::X),
+            )
+        });
+        if key_p {
+            self.set_flag_selection(Flag::Pick);
+        }
+        if key_u {
+            self.set_flag_selection(Flag::Unflagged);
+        }
+        if key_x {
+            self.set_flag_selection(Flag::Reject);
+        }
         if left {
             self.step_current(-1);
         }
@@ -497,13 +607,14 @@ impl App {
         if self.current.is_some() {
             return;
         }
+        self.ensure_visible();
         let id = self
             .grid
             .selection
             .iter()
             .next()
             .copied()
-            .or_else(|| self.images.first().map(|r| r.id));
+            .or_else(|| self.visible.first().map(|r| r.id));
         if let Some(id) = id {
             self.set_current(id);
         }
@@ -557,6 +668,7 @@ impl App {
             Ok(imgs) => self.images = imgs,
             Err(e) => tracing::error!("reload images: {e:#}"),
         }
+        self.reload_collections();
     }
 
     /// Apply the copied develop settings to every selected image.
@@ -576,6 +688,124 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Left side panel: collection list with create/delete.
+    fn show_collections_panel(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::left("collections")
+            .default_size(200.0)
+            .resizable(true)
+            .show(ui, |ui| {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Collections").strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("＋").on_hover_text("New collection").clicked()
+                            && self.new_collection_name.is_none()
+                        {
+                            self.new_collection_name = Some(String::new());
+                        }
+                    });
+                });
+                ui.separator();
+
+                let total = self.images.len();
+                if ui
+                    .selectable_label(
+                        self.active_collection.is_none(),
+                        format!("All Photos ({total})"),
+                    )
+                    .clicked()
+                {
+                    self.active_collection = None;
+                    self.visible_dirty = true;
+                }
+
+                let mut delete_collection = None;
+                for col in &self.collections {
+                    let selected = self.active_collection == Some(col.id);
+                    let resp = ui.selectable_label(
+                        selected,
+                        format!("{} ({})", col.name, col.image_count),
+                    );
+                    if resp.clicked() {
+                        self.active_collection = Some(col.id);
+                        self.visible_dirty = true;
+                    }
+                    resp.context_menu(|ui| {
+                        if ui.button("Delete collection").clicked() {
+                            delete_collection = Some(col.id);
+                            ui.close();
+                        }
+                    });
+                }
+                if let Some(cid) = delete_collection {
+                    if let Err(e) = self.catalog.delete_collection(cid) {
+                        tracing::error!("delete collection: {e:#}");
+                    }
+                    self.reload_collections();
+                }
+
+                if let Some(name) = &mut self.new_collection_name {
+                    ui.add_space(4.0);
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(name).hint_text("collection name"),
+                    );
+                    resp.request_focus();
+                    let confirmed = resp.lost_focus()
+                        && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                    if confirmed {
+                        let name = name.trim().to_string();
+                        if !name.is_empty() {
+                            match self.catalog.create_collection(&name) {
+                                Ok(cid) => {
+                                    self.reload_collections();
+                                    self.active_collection = Some(cid);
+                                }
+                                Err(e) => tracing::error!("create collection: {e:#}"),
+                            }
+                        }
+                        self.new_collection_name = None;
+                    } else if cancelled {
+                        self.new_collection_name = None;
+                    }
+                }
+            });
+    }
+
+    /// Flag filter row above the grid.
+    fn show_filter_row(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Show:").weak());
+            for (label, on, hover) in [
+                ("⚑", &mut self.filter_pick, "Picked"),
+                ("▢", &mut self.filter_unflagged, "Unflagged"),
+                ("✕", &mut self.filter_reject, "Rejected"),
+            ] {
+                if ui
+                    .selectable_label(*on, label)
+                    .on_hover_text(hover)
+                    .clicked()
+                {
+                    *on = !*on;
+                    self.visible_dirty = true;
+                }
+            }
+            if let Some(cid) = self.active_collection {
+                if let Some(col) = self.collections.iter().find(|c| c.id == cid) {
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new(format!("Collection: {}", col.name)).weak(),
+                    );
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    egui::RichText::new(format!("{} photos", self.visible.len())).weak(),
+                );
+            });
+        });
     }
 
     /// Lines for the loupe's EXIF overlay (None when the overlay is off).
@@ -636,6 +866,7 @@ impl App {
 
     /// Bottom filmstrip for the single-image views; switches images on click.
     fn show_filmstrip(&mut self, ui: &mut egui::Ui) {
+        self.ensure_visible();
         let mut clicked = None;
         egui::Panel::bottom("filmstrip")
             .exact_size(crate::ui::filmstrip::STRIP_HEIGHT)
@@ -643,7 +874,7 @@ impl App {
                 clicked = crate::ui::filmstrip::show(
                     ui,
                     &mut self.grid,
-                    &self.images,
+                    &self.visible,
                     &self.jobs,
                     self.current.as_ref().map(|c| c.id),
                     self.strip_scroll_pending,
@@ -797,19 +1028,60 @@ impl eframe::App for App {
 
         match self.view {
             View::Library => {
+                self.ensure_visible();
                 egui::CentralPanel::default().show(ui, |ui| {
                     if let Some(err) = &self.startup_error {
                         ui.colored_label(egui::Color32::LIGHT_RED, err);
                     }
                     match self.library_mode {
                         LibraryMode::Grid => {
+                            self.show_collections_panel(ui);
+                            self.ensure_visible();
+                            self.show_filter_row(ui);
+                            let viewing_collection = self
+                                .active_collection
+                                .and_then(|cid| {
+                                    self.collections.iter().find(|c| c.id == cid)
+                                })
+                                .map(|c| c.name.clone());
+                            let gctx = grid::GridContext {
+                                can_paste: self.copied_params.is_some(),
+                                collections: &self.collections,
+                                viewing_collection: viewing_collection.as_deref(),
+                            };
                             let resp = grid::show(
                                 ui,
                                 &mut self.grid,
-                                &self.images,
+                                &self.visible,
                                 &self.jobs,
-                                self.copied_params.is_some(),
+                                &gctx,
                             );
+                            if let Some(flag) = resp.set_flag {
+                                self.set_flag_selection(flag);
+                            }
+                            if let Some(cid) = resp.add_to_collection {
+                                let ids: Vec<i64> =
+                                    self.grid.selection.iter().copied().collect();
+                                if let Err(e) = self.catalog.add_to_collection(cid, &ids)
+                                {
+                                    tracing::error!("add to collection: {e:#}");
+                                }
+                                self.reload_collections();
+                            }
+                            if resp.remove_from_collection {
+                                if let Some(cid) = self.active_collection {
+                                    let ids: Vec<i64> =
+                                        self.grid.selection.iter().copied().collect();
+                                    if let Err(e) =
+                                        self.catalog.remove_from_collection(cid, &ids)
+                                    {
+                                        tracing::error!(
+                                            "remove from collection: {e:#}"
+                                        );
+                                    }
+                                    self.reload_collections();
+                                }
+                            }
                             if resp.paste_to_selection {
                                 self.paste_to_selection();
                             }

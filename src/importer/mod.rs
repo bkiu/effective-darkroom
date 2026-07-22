@@ -423,6 +423,7 @@ fn import_one(
         camera_make: info.make,
         camera_model: info.model,
         file_size,
+        flag: crate::catalog::Flag::Unflagged,
     };
     catalog.insert_image(&rec).context("insert into catalog")?;
     Ok(ImportedFile::Added)

@@ -6,7 +6,7 @@ use std::num::NonZeroUsize;
 use egui::{Color32, Rect, Sense, TextureHandle, Vec2};
 use lru::LruCache;
 
-use crate::catalog::ImageRecord;
+use crate::catalog::{Collection, Flag, ImageRecord};
 use crate::jobs::Jobs;
 
 const CELL: f32 = 160.0;
@@ -60,6 +60,20 @@ pub struct GridResponse {
     pub paste_to_selection: bool,
     /// User chose "Delete…" from a cell context menu.
     pub delete_selection: bool,
+    /// Set a flag on the selection.
+    pub set_flag: Option<Flag>,
+    /// Add the selection to this collection id.
+    pub add_to_collection: Option<i64>,
+    /// Remove the selection from the currently viewed collection.
+    pub remove_from_collection: bool,
+}
+
+/// Extra context the grid needs for its context menu.
+pub struct GridContext<'a> {
+    pub can_paste: bool,
+    pub collections: &'a [Collection],
+    /// Set when the grid is showing a collection (enables "Remove from…").
+    pub viewing_collection: Option<&'a str>,
 }
 
 pub fn show(
@@ -67,7 +81,7 @@ pub fn show(
     state: &mut GridState,
     images: &[ImageRecord],
     jobs: &Jobs,
-    can_paste: bool,
+    gctx: &GridContext<'_>,
 ) -> GridResponse {
     let mut response = GridResponse::default();
     if images.is_empty() {
@@ -97,12 +111,30 @@ pub fn show(
                         if idx >= images.len() {
                             break;
                         }
-                        cell(ui, state, images, idx, jobs, can_paste, &mut response);
+                        cell(ui, state, images, idx, jobs, gctx, &mut response);
                     }
                 });
             }
         });
     response
+}
+
+/// Small flag indicator in the cell's top-left corner.
+pub fn draw_flag_badge(painter: &egui::Painter, rect: Rect, flag: Flag) {
+    let (glyph, color) = match flag {
+        Flag::Unflagged => return,
+        Flag::Pick => ("⚑", Color32::from_rgb(140, 220, 140)),
+        Flag::Reject => ("✕", Color32::from_rgb(235, 100, 90)),
+    };
+    let badge = Rect::from_min_size(rect.min + Vec2::splat(5.0), Vec2::splat(18.0));
+    painter.rect_filled(badge, 4.0, Color32::from_black_alpha(170));
+    painter.text(
+        badge.center(),
+        egui::Align2::CENTER_CENTER,
+        glyph,
+        egui::FontId::proportional(13.0),
+        color,
+    );
 }
 
 fn cell(
@@ -111,7 +143,7 @@ fn cell(
     images: &[ImageRecord],
     idx: usize,
     jobs: &Jobs,
-    can_paste: bool,
+    gctx: &GridContext<'_>,
     grid_response: &mut GridResponse,
 ) {
     let rec = &images[idx];
@@ -143,11 +175,17 @@ fn cell(
         let scale = ((CELL - PAD) / size.x).min((CELL - PAD) / size.y);
         let img_size = size * scale;
         let img_rect = Rect::from_center_size(rect.center(), img_size);
+        // Rejects render dimmed, like Lightroom.
+        let tint = if rec.flag == Flag::Reject {
+            Color32::from_gray(90)
+        } else {
+            Color32::WHITE
+        };
         painter.image(
             tex.id(),
             img_rect,
             Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            Color32::WHITE,
+            tint,
         );
     } else if state.failed.contains(&rec.id) {
         painter.text(
@@ -168,6 +206,8 @@ fn cell(
         );
     }
 
+    draw_flag_badge(painter, rect, rec.flag);
+
     response.clone().on_hover_text(format!(
         "{}\n{} {}",
         rec.file_name, rec.camera_make, rec.camera_model
@@ -180,17 +220,66 @@ fn cell(
         } else {
             1
         };
-        if ui
-            .add_enabled(
-                can_paste,
-                egui::Button::new(format!("Paste settings to {n} selected")),
-            )
-            .clicked()
-        {
+        let retarget = |state: &mut GridState| {
             if !state.selection.contains(&rec.id) {
                 state.selection.clear();
                 state.selection.insert(rec.id);
             }
+        };
+
+        ui.label(
+            egui::RichText::new(format!("{n} photo{}", if n == 1 { "" } else { "s" }))
+                .weak()
+                .small(),
+        );
+        if ui.button("⚑ Pick").clicked() {
+            retarget(state);
+            grid_response.set_flag = Some(Flag::Pick);
+            ui.close();
+        }
+        if ui.button("Unflag").clicked() {
+            retarget(state);
+            grid_response.set_flag = Some(Flag::Unflagged);
+            ui.close();
+        }
+        if ui.button("✕ Reject").clicked() {
+            retarget(state);
+            grid_response.set_flag = Some(Flag::Reject);
+            ui.close();
+        }
+        ui.separator();
+
+        if gctx.collections.is_empty() {
+            ui.add_enabled(false, egui::Button::new("Add to collection"))
+                .on_disabled_hover_text("Create a collection in the left panel first");
+        } else {
+            ui.menu_button("Add to collection", |ui| {
+                for col in gctx.collections {
+                    if ui.button(&col.name).clicked() {
+                        retarget(state);
+                        grid_response.add_to_collection = Some(col.id);
+                        ui.close();
+                    }
+                }
+            });
+        }
+        if let Some(name) = gctx.viewing_collection {
+            if ui.button(format!("Remove from “{name}”")).clicked() {
+                retarget(state);
+                grid_response.remove_from_collection = true;
+                ui.close();
+            }
+        }
+        ui.separator();
+
+        if ui
+            .add_enabled(
+                gctx.can_paste,
+                egui::Button::new(format!("Paste settings to {n} selected")),
+            )
+            .clicked()
+        {
+            retarget(state);
             grid_response.paste_to_selection = true;
             ui.close();
         }
@@ -199,10 +288,7 @@ fn cell(
             .button(format!("Delete {n} photo{}…", if n == 1 { "" } else { "s" }))
             .clicked()
         {
-            if !state.selection.contains(&rec.id) {
-                state.selection.clear();
-                state.selection.insert(rec.id);
-            }
+            retarget(state);
             grid_response.delete_selection = true;
             ui.close();
         }

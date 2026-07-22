@@ -212,6 +212,7 @@ mod tests {
             camera_make: String::new(),
             camera_model: String::new(),
             file_size: 0,
+            flag: crate::catalog::Flag::Unflagged,
         }
     }
 

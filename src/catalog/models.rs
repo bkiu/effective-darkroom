@@ -32,6 +32,33 @@ impl FileKind {
     }
 }
 
+/// Lightroom-style flag state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Flag {
+    #[default]
+    Unflagged,
+    Pick,
+    Reject,
+}
+
+impl Flag {
+    pub fn from_i64(v: i64) -> Self {
+        match v {
+            1 => Flag::Pick,
+            -1 => Flag::Reject,
+            _ => Flag::Unflagged,
+        }
+    }
+
+    pub fn as_i64(self) -> i64 {
+        match self {
+            Flag::Unflagged => 0,
+            Flag::Pick => 1,
+            Flag::Reject => -1,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ImageRecord {
     pub id: i64,
@@ -48,4 +75,5 @@ pub struct ImageRecord {
     pub camera_make: String,
     pub camera_model: String,
     pub file_size: u64,
+    pub flag: Flag,
 }

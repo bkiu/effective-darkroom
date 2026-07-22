@@ -59,6 +59,7 @@ fn main() -> anyhow::Result<()> {
         camera_make: String::new(),
         camera_model: String::new(),
         file_size: 0,
+        flag: effective_darkroom::catalog::Flag::Unflagged,
     };
 
     // Decode.

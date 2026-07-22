@@ -10,7 +10,15 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
-pub use models::{FileKind, ImageRecord};
+pub use models::{FileKind, Flag, ImageRecord};
+
+/// A named grouping of images.
+#[derive(Debug, Clone)]
+pub struct Collection {
+    pub id: i64,
+    pub name: String,
+    pub image_count: usize,
+}
 
 /// Directory holding catalog.db and the thumbnail cache.
 pub fn data_dir() -> PathBuf {
@@ -116,7 +124,7 @@ impl Catalog {
     pub fn all_images(&self) -> Result<Vec<ImageRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, abs_path, file_name, kind, capture_ts, imported_ts,
-                    width, height, orientation, camera_make, camera_model, file_size
+                    width, height, orientation, camera_make, camera_model, file_size, flag
              FROM images ORDER BY capture_ts DESC, id DESC",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -133,8 +141,79 @@ impl Catalog {
                 camera_make: r.get(9)?,
                 camera_model: r.get(10)?,
                 file_size: r.get::<_, i64>(11)? as u64,
+                flag: Flag::from_i64(r.get(12)?),
             })
         })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    pub fn set_flag(&self, ids: &[i64], flag: Flag) -> Result<()> {
+        let mut stmt = self
+            .conn
+            .prepare("UPDATE images SET flag = ?1 WHERE id = ?2")?;
+        for id in ids {
+            stmt.execute(params![flag.as_i64(), id])?;
+        }
+        Ok(())
+    }
+
+    // --- collections ---
+
+    pub fn create_collection(&self, name: &str) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO collections (name, created_ts) VALUES (?1, unixepoch())",
+            params![name.trim()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn delete_collection(&self, id: i64) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM collections WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn list_collections(&self) -> Result<Vec<Collection>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT c.id, c.name,
+                    (SELECT COUNT(*) FROM collection_images ci WHERE ci.collection_id = c.id)
+             FROM collections c ORDER BY c.name",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(Collection {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                image_count: r.get::<_, i64>(2)? as usize,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    pub fn add_to_collection(&self, collection_id: i64, image_ids: &[i64]) -> Result<()> {
+        let mut stmt = self.conn.prepare(
+            "INSERT OR IGNORE INTO collection_images (collection_id, image_id) VALUES (?1, ?2)",
+        )?;
+        for id in image_ids {
+            stmt.execute(params![collection_id, id])?;
+        }
+        Ok(())
+    }
+
+    pub fn remove_from_collection(&self, collection_id: i64, image_ids: &[i64]) -> Result<()> {
+        let mut stmt = self.conn.prepare(
+            "DELETE FROM collection_images WHERE collection_id = ?1 AND image_id = ?2",
+        )?;
+        for id in image_ids {
+            stmt.execute(params![collection_id, id])?;
+        }
+        Ok(())
+    }
+
+    pub fn collection_image_ids(&self, collection_id: i64) -> Result<std::collections::HashSet<i64>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT image_id FROM collection_images WHERE collection_id = ?1")?;
+        let rows = stmt.query_map(params![collection_id], |r| r.get(0))?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
@@ -203,6 +282,7 @@ mod tests {
             camera_make: "Canon".into(),
             camera_model: "EOS RP".into(),
             file_size: 123,
+            flag: Flag::Unflagged,
         }
     }
 
@@ -246,6 +326,45 @@ mod tests {
         let (ver, json) = cat.load_edit(id).unwrap().unwrap();
         assert_eq!(ver, 1);
         assert!(json.contains("1.0"));
+    }
+
+    #[test]
+    fn flags_roundtrip() {
+        let cat = mem_catalog();
+        let id = cat.insert_image(&sample("/lib/a.jpg")).unwrap();
+        cat.set_flag(&[id], Flag::Pick).unwrap();
+        assert_eq!(cat.all_images().unwrap()[0].flag, Flag::Pick);
+        cat.set_flag(&[id], Flag::Reject).unwrap();
+        assert_eq!(cat.all_images().unwrap()[0].flag, Flag::Reject);
+        cat.set_flag(&[id], Flag::Unflagged).unwrap();
+        assert_eq!(cat.all_images().unwrap()[0].flag, Flag::Unflagged);
+    }
+
+    #[test]
+    fn collections_crud() {
+        let cat = mem_catalog();
+        let a = cat.insert_image(&sample("/lib/a.jpg")).unwrap();
+        let b = cat.insert_image(&sample("/lib/b.jpg")).unwrap();
+        let cid = cat.create_collection("Trip").unwrap();
+        cat.add_to_collection(cid, &[a, b]).unwrap();
+        cat.add_to_collection(cid, &[a]).unwrap(); // idempotent
+        let cols = cat.list_collections().unwrap();
+        assert_eq!(cols.len(), 1);
+        assert_eq!(cols[0].image_count, 2);
+        assert!(cat.collection_image_ids(cid).unwrap().contains(&a));
+
+        cat.remove_from_collection(cid, &[a]).unwrap();
+        assert_eq!(cat.collection_image_ids(cid).unwrap().len(), 1);
+
+        // Deleting an image cascades out of collections.
+        cat.delete_images(&[b]).unwrap();
+        assert!(cat.collection_image_ids(cid).unwrap().is_empty());
+
+        cat.delete_collection(cid).unwrap();
+        assert!(cat.list_collections().unwrap().is_empty());
+        // Duplicate collection names are rejected.
+        cat.create_collection("X").unwrap();
+        assert!(cat.create_collection("X").is_err());
     }
 
     #[test]
