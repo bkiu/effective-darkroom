@@ -1,0 +1,45 @@
+[workspace]
+members = ["crates/libraw-ffi"]
+
+[package]
+name = "effective-darkroom"
+version = "0.1.0"
+edition = "2021"
+description = "A Lightroom-style RAW/JPEG library and editor"
+license = "MIT"
+
+[dependencies]
+libraw-ffi = { path = "crates/libraw-ffi" }
+
+eframe = { version = "0.35", default-features = false, features = ["wgpu", "wayland", "x11", "default_fonts"] }
+egui = "0.35"
+egui_extras = "0.35"
+wgpu = "29"
+
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+fast_image_resize = "5"
+kamadak-exif = "0.6"
+
+rfd = "0.15"
+crossbeam-channel = "0.5"
+rayon = "1"
+half = { version = "2", features = ["bytemuck"] }
+bytemuck = { version = "1", features = ["derive"] }
+chrono = "0.4"
+walkdir = "2"
+lru = "0.12"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dirs = "6"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

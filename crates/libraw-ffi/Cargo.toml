@@ -1,0 +1,12 @@
+[package]
+name = "libraw-ffi"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+thiserror = "2"
+
+[build-dependencies]
+bindgen = "0.71"
+pkg-config = "0.3"
