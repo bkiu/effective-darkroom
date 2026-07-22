@@ -154,12 +154,26 @@ pub struct App {
     decode_generation: u64,
     /// Latest rendered output for the loupe.
     rendered: Option<(egui::TextureId, egui::Vec2)>,
+    logo: Option<egui::TextureHandle>,
     startup_error: Option<String>,
 }
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
+
+        // Inter as the primary UI font, with egui's emoji fonts as fallback.
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "Inter".into(),
+            egui::FontData::from_static(include_bytes!("../assets/fonts/Inter.ttf")).into(),
+        );
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, "Inter".into());
+        cc.egui_ctx.set_fonts(fonts);
 
         let early_config = AppConfig::load();
         let zoom = early_config.ui_zoom.unwrap_or(DEFAULT_UI_ZOOM);
@@ -208,6 +222,18 @@ impl App {
             }
         }
 
+        let logo = image::load_from_memory(include_bytes!("../assets/icon.png"))
+            .ok()
+            .map(|img| {
+                let rgba = img.to_rgba8();
+                let size = [rgba.width() as usize, rgba.height() as usize];
+                cc.egui_ctx.load_texture(
+                    "app-logo",
+                    egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
+                    egui::TextureOptions::LINEAR,
+                )
+            });
+
         let collections = catalog.list_collections().unwrap_or_default();
         Self {
             catalog,
@@ -247,6 +273,7 @@ impl App {
             latest_zoom: zoom,
             decode_generation: 0,
             rendered: None,
+            logo,
             startup_error,
         }
     }
@@ -795,7 +822,9 @@ impl App {
 
     /// Flag filter row above the grid.
     fn show_filter_row(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
         ui.horizontal(|ui| {
+            ui.add_space(14.0);
             ui.label(egui::RichText::new("Show:").weak());
             for (label, on, hover) in [
                 ("⚑", &mut self.filter_pick, "Picked"),
@@ -959,7 +988,12 @@ impl eframe::App for App {
                 });
         }
 
-        let action = top_bar::show(ui, &mut self.view, self.grid.selection.len());
+        let action = top_bar::show(
+            ui,
+            &mut self.view,
+            self.grid.selection.len(),
+            self.logo.as_ref(),
+        );
         if action.open_import {
             self.import.open = true;
             // Default the destination to the library location.

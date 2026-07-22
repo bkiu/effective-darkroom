@@ -62,6 +62,11 @@ the Wayland/Vulkan runtime libraries.
   Adobe JPEG) pairs; output goes into `assets/base_curves/`
 - `probe` (in `crates/libraw-ffi`) — LibRaw metadata/thumb/decode smoke test
 
+## Credits
+
+- UI font: [Inter](https://rsms.me/inter/) (SIL Open Font License 1.1),
+  bundled at `assets/fonts/Inter.ttf`.
+
 ## Machine-specific notes
 
 - The wgpu backend is pinned to Vulkan/GL because automatic selection stalls

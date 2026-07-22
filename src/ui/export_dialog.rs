@@ -41,6 +41,7 @@ impl ExportBase {
 #[serde(default)]
 pub struct ExportPrefs {
     pub base: ExportBase,
+    pub use_subfolder: bool,
     pub subfolder: String,
     pub quality: u8,
     pub resize_enabled: bool,
@@ -53,6 +54,7 @@ impl Default for ExportPrefs {
     fn default() -> Self {
         Self {
             base: ExportBase::Pictures,
+            use_subfolder: false,
             subfolder: String::new(),
             quality: 90,
             resize_enabled: true,
@@ -67,10 +69,10 @@ impl ExportPrefs {
     pub fn dest(&self) -> Option<PathBuf> {
         let base = self.base.path()?;
         let sub = self.subfolder.trim();
-        Some(if sub.is_empty() {
-            base
-        } else {
+        Some(if self.use_subfolder && !sub.is_empty() {
             base.join(sub)
+        } else {
+            base
         })
     }
 }
@@ -109,13 +111,17 @@ impl ExportDialog {
                     return;
                 }
 
+                ui.add_space(4.0);
                 ui.label(format!(
                     "{selected} image{} selected",
                     if selected == 1 { "" } else { "s" }
                 ));
+                ui.add_space(6.0);
                 ui.separator();
+                ui.add_space(8.0);
 
                 ui.label(egui::RichText::new("Export Location").strong());
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.label("Export to");
                     let current_label = self.prefs.base.label();
@@ -136,12 +142,14 @@ impl ExportDialog {
                             }
                         });
                 });
+                ui.add_space(2.0);
                 ui.horizontal(|ui| {
-                    ui.label("Subfolder");
-                    ui.add(
+                    ui.checkbox(&mut self.prefs.use_subfolder, "Put in subfolder");
+                    ui.add_enabled(
+                        self.prefs.use_subfolder,
                         egui::TextEdit::singleline(&mut self.prefs.subfolder)
-                            .hint_text("optional")
-                            .desired_width(220.0),
+                            .hint_text("subfolder name")
+                            .desired_width(200.0),
                     );
                 });
                 match self.prefs.dest() {
@@ -160,8 +168,9 @@ impl ExportDialog {
                     }
                 }
 
-                ui.add_space(6.0);
+                ui.add_space(12.0);
                 ui.label(egui::RichText::new("File Settings").strong());
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.label("Quality");
                     let mut q = self.prefs.quality as u32;
@@ -169,8 +178,9 @@ impl ExportDialog {
                     self.prefs.quality = q as u8;
                 });
 
-                ui.add_space(6.0);
+                ui.add_space(12.0);
                 ui.label(egui::RichText::new("Image Sizing").strong());
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut self.prefs.resize_enabled, "Resize long edge to");
                     ui.add_enabled(
@@ -181,8 +191,9 @@ impl ExportDialog {
                     );
                 });
 
-                ui.add_space(6.0);
+                ui.add_space(12.0);
                 ui.label(egui::RichText::new("File Naming").strong());
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.label("Prefix");
                     ui.add(
@@ -191,12 +202,15 @@ impl ExportDialog {
                             .desired_width(160.0),
                     );
                 });
+                ui.add_space(2.0);
                 ui.horizontal(|ui| {
                     ui.radio_value(&mut self.prefs.naming, Naming::Original, "Original name");
                     ui.radio_value(&mut self.prefs.naming, Naming::DateTime, "YYYYMMDD_HHMMSS");
                 });
 
+                ui.add_space(8.0);
                 ui.separator();
+                ui.add_space(6.0);
                 if let Some(out) = &self.last_outcome {
                     ui.label(format!("Exported {} images", out.exported));
                     for err in &out.errors {

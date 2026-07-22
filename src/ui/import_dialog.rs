@@ -200,6 +200,7 @@ impl ImportDialog {
     }
 
     fn configure_ui(&mut self, ui: &mut egui::Ui, action: &mut DialogAction) {
+        ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.source_kind, SourceKind::Files, "Files / Folders");
             let was_camera = self.source_kind == SourceKind::Camera;
@@ -208,15 +209,20 @@ impl ImportDialog {
                 self.refresh_cameras();
             }
         });
+        ui.add_space(6.0);
         ui.separator();
+        ui.add_space(8.0);
 
         match self.source_kind {
             SourceKind::Files => self.files_section(ui),
             SourceKind::Camera => self.camera_section(ui),
         }
 
+        ui.add_space(8.0);
         ui.separator();
+        ui.add_space(8.0);
         ui.heading("Destination");
+        ui.add_space(4.0);
         ui.horizontal(|ui| {
             if ui.button("Choose…").clicked() {
                 if let Some(dir) = rfd::FileDialog::new().pick_folder() {
@@ -234,13 +240,16 @@ impl ImportDialog {
                 .small(),
         );
         if self.source_kind == SourceKind::Files {
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.radio_value(&mut self.mode, ImportModeChoice::Copy, "Copy");
                 ui.radio_value(&mut self.mode, ImportModeChoice::Move, "Move");
             });
         }
 
+        ui.add_space(8.0);
         ui.separator();
+        ui.add_space(6.0);
         if let Some(out) = &self.last_outcome {
             let mut msg = format!("Imported {} photos", out.imported);
             if out.skipped_duplicates > 0 {
