@@ -38,6 +38,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "6"
 gphoto2 = "3.4.1"
 trash = "5.2.6"
+rawler = "0.7.2"
 
 [profile.dev]
 opt-level = 1

@@ -29,6 +29,11 @@ fn main() -> anyhow::Result<()> {
     let spec = ExportSpec {
         image_ids: ids,
         dest,
+        format: if args.iter().any(|a| a == "--dng") {
+            effective_darkroom::engine::export::ExportFormat::Dng
+        } else {
+            effective_darkroom::engine::export::ExportFormat::Jpeg
+        },
         quality,
         long_edge,
         prefix,

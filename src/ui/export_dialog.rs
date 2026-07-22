@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::engine::export::{ExportOutcome, ExportSpec, Naming};
+use crate::engine::export::{ExportFormat, ExportOutcome, ExportSpec, Naming};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExportBase {
@@ -43,6 +43,7 @@ pub struct ExportPrefs {
     pub base: ExportBase,
     pub use_subfolder: bool,
     pub subfolder: String,
+    pub format: ExportFormat,
     pub quality: u8,
     pub resize_enabled: bool,
     pub long_edge: u32,
@@ -56,6 +57,7 @@ impl Default for ExportPrefs {
             base: ExportBase::Pictures,
             use_subfolder: false,
             subfolder: String::new(),
+            format: ExportFormat::Jpeg,
             quality: 90,
             resize_enabled: true,
             long_edge: 3000,
@@ -172,24 +174,43 @@ impl ExportDialog {
                 ui.label(egui::RichText::new("File Settings").strong());
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    ui.label("Quality");
-                    let mut q = self.prefs.quality as u32;
-                    ui.add(egui::Slider::new(&mut q, 1..=100));
-                    self.prefs.quality = q as u8;
+                    ui.label("Format");
+                    ui.radio_value(&mut self.prefs.format, ExportFormat::Jpeg, "JPEG");
+                    ui.radio_value(&mut self.prefs.format, ExportFormat::Dng, "DNG");
                 });
+                match self.prefs.format {
+                    ExportFormat::Jpeg => {
+                        ui.horizontal(|ui| {
+                            ui.label("Quality");
+                            let mut q = self.prefs.quality as u32;
+                            ui.add(egui::Slider::new(&mut q, 1..=100));
+                            self.prefs.quality = q as u8;
+                        });
 
-                ui.add_space(12.0);
-                ui.label(egui::RichText::new("Image Sizing").strong());
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.prefs.resize_enabled, "Resize long edge to");
-                    ui.add_enabled(
-                        self.prefs.resize_enabled,
-                        egui::DragValue::new(&mut self.prefs.long_edge)
-                            .range(256..=10000)
-                            .suffix(" px"),
-                    );
-                });
+                        ui.add_space(12.0);
+                        ui.label(egui::RichText::new("Image Sizing").strong());
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut self.prefs.resize_enabled, "Resize long edge to");
+                            ui.add_enabled(
+                                self.prefs.resize_enabled,
+                                egui::DragValue::new(&mut self.prefs.long_edge)
+                                    .range(256..=10000)
+                                    .suffix(" px"),
+                            );
+                        });
+                    }
+                    ExportFormat::Dng => {
+                        ui.label(
+                            egui::RichText::new(
+                                "Lossless conversion of the original raw data. Develop \
+                                 edits are not baked in; JPEG sources are skipped.",
+                            )
+                            .weak()
+                            .small(),
+                        );
+                    }
+                }
 
                 ui.add_space(12.0);
                 ui.label(egui::RichText::new("File Naming").strong());
@@ -225,6 +246,7 @@ impl ExportDialog {
                     start = Some(ExportSpec {
                         image_ids: Vec::new(), // filled by the caller
                         dest: dest.unwrap(),
+                        format: self.prefs.format,
                         quality: self.prefs.quality,
                         long_edge: self
                             .prefs

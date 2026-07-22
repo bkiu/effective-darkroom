@@ -20,10 +20,20 @@ pub enum Naming {
     DateTime,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ExportFormat {
+    /// Rendered JPEG through the develop pipeline.
+    Jpeg,
+    /// Lossless DNG conversion of the original raw data (RAW sources only;
+    /// develop edits are not baked in).
+    Dng,
+}
+
 #[derive(Debug, Clone)]
 pub struct ExportSpec {
     pub image_ids: Vec<i64>,
     pub dest: PathBuf,
+    pub format: ExportFormat,
     /// JPEG quality 1-100.
     pub quality: u8,
     /// Resize so the long edge is at most this many pixels.
@@ -57,7 +67,11 @@ pub fn export_file_name(spec: &ExportSpec, rec: &ImageRecord) -> String {
                     .unwrap_or_else(|| rec.file_name.clone())
             }),
     };
-    format!("{}{}.jpg", spec.prefix, stem)
+    let ext = match spec.format {
+        ExportFormat::Jpeg => "jpg",
+        ExportFormat::Dng => "dng",
+    };
+    format!("{}{}.{}", spec.prefix, stem, ext)
 }
 
 fn unique_path(dir: &Path, name: &str) -> PathBuf {
@@ -108,6 +122,9 @@ fn export_one(
     spec: &ExportSpec,
     rec: &ImageRecord,
 ) -> Result<()> {
+    if spec.format == ExportFormat::Dng {
+        return export_one_dng(spec, rec);
+    }
     // Decode at full quality.
     let image = match rec.kind {
         FileKind::Jpeg => full::decode_preview(rec)?,
@@ -170,6 +187,28 @@ fn export_one(
     Ok(())
 }
 
+/// Lossless DNG conversion of the original raw file (rawler / DNGLab).
+/// Develop edits are not baked in; the DNG holds the untouched raw data.
+fn export_one_dng(spec: &ExportSpec, rec: &ImageRecord) -> Result<()> {
+    anyhow::ensure!(
+        rec.kind == FileKind::Raw,
+        "DNG export needs a RAW source (this is a JPEG)"
+    );
+    let out_path = unique_path(&spec.dest, &export_file_name(spec, rec));
+    let file = std::fs::File::create(&out_path).context("create output file")?;
+    let mut writer = std::io::BufWriter::new(file);
+    let params = rawler::dng::convert::ConvertParams {
+        software: "Effective Darkroom".into(),
+        // Matches Adobe's default: don't embed a full copy of the original
+        // (the library keeps the original anyway; embedding doubles the size).
+        embedded: false,
+        ..Default::default()
+    };
+    rawler::dng::convert::convert_raw_file(&rec.abs_path, &mut writer, &params)
+        .map_err(|e| anyhow::anyhow!("DNG conversion: {e}"))?;
+    Ok(())
+}
+
 fn resize_long_edge(img: &image::RgbaImage, edge: u32) -> Result<image::RgbaImage> {
     use fast_image_resize as fir;
     let (w, h) = (img.width(), img.height());
@@ -221,6 +260,7 @@ mod tests {
         let mut spec = ExportSpec {
             image_ids: vec![],
             dest: PathBuf::new(),
+            format: ExportFormat::Jpeg,
             quality: 85,
             long_edge: None,
             prefix: String::new(),
