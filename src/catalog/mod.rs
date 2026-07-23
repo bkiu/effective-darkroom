@@ -138,7 +138,7 @@ impl Catalog {
         let mut stmt = self.conn.prepare(
             "SELECT id, abs_path, file_name, kind, capture_ts, imported_ts,
                     width, height, orientation, camera_make, camera_model, file_size, flag
-             FROM images ORDER BY capture_ts DESC, id DESC",
+             FROM images ORDER BY capture_ts ASC, id ASC",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(ImageRecord {
