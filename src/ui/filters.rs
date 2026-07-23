@@ -223,7 +223,7 @@ pub fn show(
                 let key = (*year, *month);
                 let mut on = state.months.contains(&key);
                 ui.horizontal(|ui| {
-                    ui.add_space(20.0);
+                    ui.add_space(36.0);
                     if filter_row(ui, &mut on, MONTH_NAMES[(*month - 1) as usize], *mcount)
                     {
                         if on {
