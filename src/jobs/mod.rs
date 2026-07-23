@@ -69,6 +69,12 @@ pub enum JobResult {
         /// Suggested crop angle, or None when no confident line direction.
         angle: Option<f32>,
     },
+    MoveLibraryProgress {
+        current: usize,
+        total: usize,
+        file_name: String,
+    },
+    MoveLibraryDone(crate::maintenance::MoveOutcome),
 }
 
 pub struct Jobs {

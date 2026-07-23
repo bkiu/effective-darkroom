@@ -75,6 +75,10 @@ release binary.
 - Thumbnail cache: `~/.local/share/effective-darkroom/thumbs/`
 - App config: `~/.config/effective-darkroom/config.json`
 
+The Settings screen (gear icon) can change the default library location,
+relocate the whole library (files are moved and the catalog re-pointed),
+and move the catalog + thumbnail cache to another folder.
+
 ## Development tools (cargo examples)
 
 - `render_cli` — render one file through the develop engine to PNG/JPEG

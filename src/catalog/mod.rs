@@ -20,11 +20,24 @@ pub struct Collection {
     pub image_count: usize,
 }
 
-/// Directory holding catalog.db and the thumbnail cache.
+/// Directory holding catalog.db and the thumbnail cache. Defaults to the
+/// XDG data dir; a `catalog_dir` entry in the app config redirects it (set
+/// via Settings → Move catalog). Read directly here so background workers
+/// that open their own catalog connection resolve the same location.
 pub fn data_dir() -> PathBuf {
+    if let Some(dir) = configured_catalog_dir() {
+        return dir;
+    }
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("effective-darkroom")
+}
+
+fn configured_catalog_dir() -> Option<PathBuf> {
+    let cfg = dirs::config_dir()?.join("effective-darkroom/config.json");
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(cfg).ok()?).ok()?;
+    json.get("catalog_dir")?.as_str().map(PathBuf::from)
 }
 
 pub fn thumbs_dir() -> PathBuf {
@@ -226,6 +239,22 @@ impl Catalog {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?)
+    }
+
+    /// Flush the WAL into the main database file (before moving it).
+    pub fn checkpoint(&self) -> Result<()> {
+        self.conn
+            .pragma_update(None, "wal_checkpoint", "TRUNCATE")?;
+        Ok(())
+    }
+
+    /// Re-point an image at a new absolute path (library move).
+    pub fn update_abs_path(&self, id: i64, new_path: &Path) -> Result<()> {
+        self.conn.execute(
+            "UPDATE images SET abs_path = ?1 WHERE id = ?2",
+            params![new_path.to_string_lossy(), id],
+        )?;
+        Ok(())
     }
 
     /// Remove images (and their edits, via cascade) from the catalog. Files

@@ -47,6 +47,9 @@ pub struct AppConfig {
     pub export: Option<crate::ui::export_dialog::ExportPrefs>,
     /// Show the EXIF info overlay in the loupe (toggled with I).
     pub show_info_overlay: Option<bool>,
+    /// Custom catalog directory (Settings -> Move catalog). Also read
+    /// directly by catalog::data_dir() for background workers.
+    pub catalog_dir: Option<PathBuf>,
     /// Legacy field, migrated into `library_root`.
     pub last_import_dest: Option<PathBuf>,
 }
@@ -141,6 +144,7 @@ pub struct App {
     import: ImportDialog,
     export: ExportDialog,
     delete: DeleteDialog,
+    settings: crate::ui::settings_dialog::SettingsDialog,
     config: AppConfig,
     /// First-run prompt asking where the library should live.
     library_prompt_open: bool,
@@ -272,6 +276,7 @@ impl App {
                 d
             },
             delete: DeleteDialog::default(),
+            settings: Default::default(),
             show_info: config.show_info_overlay.unwrap_or(false),
             crop_ui: develop_panel::CropUiState {
                 // ED_STARTUP_CROP=1: open with the crop tool active (dev hook)
@@ -573,6 +578,22 @@ impl App {
                 } => {
                     self.export.progress = Some((current, total, file_name));
                 }
+                JobResult::MoveLibraryProgress {
+                    current,
+                    total,
+                    file_name,
+                } => {
+                    self.settings.move_progress = Some((current, total, file_name));
+                }
+                JobResult::MoveLibraryDone(outcome) => {
+                    self.settings.on_move_done(outcome);
+                    match self.catalog.all_images() {
+                        Ok(imgs) => self.images = imgs,
+                        Err(e) => tracing::error!("reload images: {e:#}"),
+                    }
+                    self.visible_dirty = true;
+                    // Thumbs cache keys by id, so cached thumbnails stay valid.
+                }
                 JobResult::AutoStraighten { image_id, angle } => {
                     self.crop_ui.auto_pending = false;
                     match angle {
@@ -685,6 +706,53 @@ impl App {
             .or_else(|| self.visible.first().map(|r| r.id));
         if let Some(id) = id {
             self.set_current(id);
+        }
+    }
+
+    /// Move catalog.db + thumbs to a new directory and reopen. Runs inline;
+    /// the data is small (the database plus the thumbnail cache).
+    fn move_catalog(&mut self, new_dir: PathBuf) {
+        let current = crate::catalog::data_dir();
+        if current == new_dir {
+            self.settings.catalog_message =
+                Some("That is already the catalog location".into());
+            return;
+        }
+        // Flush pending edits, then release the connection by swapping in an
+        // in-memory placeholder while files move.
+        self.flush_edits();
+        let result = (|| -> anyhow::Result<()> {
+            self.catalog.checkpoint()?;
+            self.catalog = Catalog::open_at(std::path::Path::new(":memory:"))?;
+            crate::maintenance::move_catalog_files(&current, &new_dir)?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                self.config.catalog_dir = Some(new_dir.clone());
+                self.config.save();
+                self.settings.catalog_message =
+                    Some(format!("Catalog moved to {}", new_dir.display()));
+            }
+            Err(e) => {
+                tracing::error!("move catalog: {e:#}");
+                self.settings.catalog_message = Some(format!("Move failed: {e:#}"));
+            }
+        }
+        // Reopen from the (possibly updated) configured location.
+        match Catalog::open_default() {
+            Ok(cat) => {
+                self.catalog = cat;
+                match self.catalog.all_images() {
+                    Ok(imgs) => self.images = imgs,
+                    Err(e) => tracing::error!("reload images: {e:#}"),
+                }
+                self.visible_dirty = true;
+                self.reload_collections();
+            }
+            Err(e) => {
+                self.startup_error = Some(format!("failed to reopen catalog: {e:#}"));
+            }
         }
     }
 
@@ -1137,6 +1205,10 @@ impl eframe::App for App {
         if action.open_export {
             self.export.open = true;
         }
+        if action.open_settings {
+            self.settings.open = true;
+            self.settings.catalog_message = None;
+        }
         if self.view == View::Develop {
             self.ensure_current_from_selection();
         }
@@ -1169,6 +1241,46 @@ impl eframe::App for App {
             DeleteAction::None => {}
             DeleteAction::RemoveFromLibrary => self.delete_images(false),
             DeleteAction::DeleteFromDisk => self.delete_images(true),
+        }
+
+        {
+            use crate::ui::settings_dialog::SettingsAction;
+            let catalog_dir = crate::catalog::data_dir();
+            match self
+                .settings
+                .show(&ctx, self.config.library_root.as_ref(), &catalog_dir)
+            {
+                SettingsAction::None => {}
+                SettingsAction::SetLibraryRoot(dir) => {
+                    self.config.library_root = Some(dir.clone());
+                    self.config.save();
+                    self.import.dest_root = Some(dir);
+                }
+                SettingsAction::StartLibraryMove(new_root) => {
+                    if let Some(old_root) = self.config.library_root.clone() {
+                        let cancel =
+                            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                        self.settings.move_cancel = Some(cancel.clone());
+                        self.settings.move_progress =
+                            Some((0, 0, String::from("starting…")));
+                        // The new root becomes the import default up front so
+                        // parallel imports land in the right place.
+                        self.config.library_root = Some(new_root.clone());
+                        self.config.save();
+                        self.import.dest_root = Some(new_root.clone());
+                        crate::maintenance::move_library(
+                            old_root,
+                            new_root,
+                            self.jobs.results_tx.clone(),
+                            ctx.clone(),
+                            cancel,
+                        );
+                    }
+                }
+                SettingsAction::MoveCatalog(new_dir) => {
+                    self.move_catalog(new_dir);
+                }
+            }
         }
 
         if let Some(mut spec) = self.export.show(&ctx, self.grid.selection.len()) {

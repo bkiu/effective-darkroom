@@ -5,6 +5,7 @@ use crate::app::View;
 pub struct TopBarAction {
     pub open_import: bool,
     pub open_export: bool,
+    pub open_settings: bool,
 }
 
 pub fn show(
@@ -16,6 +17,7 @@ pub fn show(
     let mut action = TopBarAction {
         open_import: false,
         open_export: false,
+        open_settings: false,
     };
     egui::Panel::top("top_bar").show(ui, |ui| {
         ui.add_space(8.0);
@@ -54,6 +56,14 @@ pub fn show(
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(12.0);
+                if ui
+                    .button("⚙")
+                    .on_hover_text("Settings")
+                    .clicked()
+                {
+                    action.open_settings = true;
+                }
+                ui.add_space(6.0);
                 for (label, v) in [("Develop", View::Develop), ("Library", View::Library)] {
                     let selected = *view == v;
                     let text = if selected {
