@@ -37,10 +37,14 @@ fn main() -> eframe::Result {
         })
         .ok();
 
+    // ED_TITLE: dev hook so test instances are distinguishable from the
+    // user's running copy (window activation scripts match by caption).
+    let title =
+        std::env::var("ED_TITLE").unwrap_or_else(|_| "Effective Darkroom".to_string());
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([1440.0, 900.0])
         .with_min_inner_size([900.0, 600.0])
-        .with_title("Effective Darkroom")
+        .with_title(title)
         .with_app_id("effective-darkroom");
     if let Some(icon) = icon {
         viewport = viewport.with_icon(icon);

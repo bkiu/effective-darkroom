@@ -256,8 +256,10 @@ pub fn apply(ctx: &egui::Context) {
         v.widgets.open.bg_stroke = Stroke::new(1.0, accent());
         v.widgets.open.corner_radius = CornerRadius::same(RADIUS_MD);
 
-        v.selection.bg_fill = oklch(0.66, 0.12, 216.0).color32().gamma_multiply(0.35);
-        v.selection.stroke = Stroke::new(1.5, accent());
+        // Solid accent for selected/active states (design: filled cyan with
+        // white content), not a dimmed tint.
+        v.selection.bg_fill = accent();
+        v.selection.stroke = Stroke::new(1.0, Color32::WHITE);
         v.hyperlink_color = accent();
         v.error_fg_color = danger();
         v.warn_fg_color = flag_pick();

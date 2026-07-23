@@ -415,7 +415,7 @@ impl ImportDialog {
             painter.rect_stroke(
                 img_rect,
                 4.0,
-                egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
+                egui::Stroke::new(2.0, crate::ui::theme::accent()),
                 egui::StrokeKind::Inside,
             );
         }

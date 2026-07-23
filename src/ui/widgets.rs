@@ -166,8 +166,8 @@ pub fn segmented<V: PartialEq + Copy>(
     options: &[(V, &str)],
 ) -> bool {
     let mut changed = false;
-    let pad = Vec2::new(14.0, 5.0);
-    let font = theme::body_font();
+    let pad = Vec2::new(16.0, 7.0);
+    let font = egui::FontId::new(13.0, theme::semibold());
     let height = ui.text_style_height(&egui::TextStyle::Body) + pad.y * 2.0;
 
     // Measure segments.
@@ -182,30 +182,34 @@ pub fn segmented<V: PartialEq + Copy>(
         })
         .collect();
     let total: f32 = widths.iter().sum();
-    let (outer, _) = ui.allocate_exact_size(Vec2::new(total + 4.0, height), Sense::hover());
+    let (outer, _) =
+        ui.allocate_exact_size(Vec2::new(total + 8.0, height), Sense::hover());
+    // Pill container on a near-black well.
+    let pill = (height / 2.0) as u8;
     ui.painter()
-        .rect_filled(outer, CornerRadius::same(theme::RADIUS_MD), theme::bg_canvas());
+        .rect_filled(outer, CornerRadius::same(pill), theme::bg_canvas());
+    ui.painter().rect_stroke(
+        outer,
+        CornerRadius::same(pill),
+        Stroke::new(1.0, theme::line_subtle()),
+        egui::StrokeKind::Inside,
+    );
 
-    let mut x = outer.left() + 2.0;
+    let mut x = outer.left() + 4.0;
     for ((value, label), w) in options.iter().zip(&widths) {
         let seg = Rect::from_min_size(
-            Pos2::new(x, outer.top() + 2.0),
-            Vec2::new(*w, height - 4.0),
+            Pos2::new(x, outer.top() + 4.0),
+            Vec2::new(*w, height - 8.0),
         );
         let resp = ui.interact(seg, ui.id().with(("segment", label)), Sense::click());
         let active = *selected == *value;
+        let seg_pill = (seg.height() / 2.0) as u8;
         if active {
-            ui.painter().rect_filled(
-                seg,
-                CornerRadius::same(theme::RADIUS_SM),
-                theme::accent(),
-            );
+            ui.painter()
+                .rect_filled(seg, CornerRadius::same(seg_pill), theme::accent());
         } else if resp.hovered() {
-            ui.painter().rect_filled(
-                seg,
-                CornerRadius::same(theme::RADIUS_SM),
-                theme::bg_raised(),
-            );
+            ui.painter()
+                .rect_filled(seg, CornerRadius::same(seg_pill), theme::bg_raised());
         }
         ui.painter().text(
             seg.center(),
@@ -213,7 +217,7 @@ pub fn segmented<V: PartialEq + Copy>(
             label,
             font.clone(),
             if active {
-                theme::on_accent()
+                Color32::WHITE
             } else {
                 theme::text_muted()
             },
@@ -225,4 +229,53 @@ pub fn segmented<V: PartialEq + Copy>(
         x += w;
     }
     changed
+}
+
+
+/// Sidebar list row: name left, mono count right, teal-tinted active state.
+pub fn collection_row(
+    ui: &mut egui::Ui,
+    name: &str,
+    count: usize,
+    active: bool,
+) -> egui::Response {
+    let width = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, 38.0), Sense::click());
+    let radius = CornerRadius::same(theme::RADIUS_LG);
+    if active {
+        ui.painter()
+            .rect_filled(rect, radius, theme::accent().gamma_multiply(0.13));
+        ui.painter().rect_stroke(
+            rect,
+            radius,
+            Stroke::new(1.0, theme::accent().gamma_multiply(0.55)),
+            egui::StrokeKind::Inside,
+        );
+    } else if resp.hovered() {
+        ui.painter().rect_filled(rect, radius, theme::bg_raised());
+    }
+    let pad = 12.0;
+    ui.painter().text(
+        Pos2::new(rect.left() + pad, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        name,
+        if active {
+            egui::FontId::new(13.5, theme::semibold())
+        } else {
+            theme::body_font()
+        },
+        if active {
+            theme::text_primary()
+        } else {
+            theme::text_secondary()
+        },
+    );
+    ui.painter().text(
+        Pos2::new(rect.right() - pad, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        count.to_string(),
+        egui::FontId::new(12.5, theme::mono()),
+        theme::text_muted(),
+    );
+    resp
 }

@@ -869,12 +869,13 @@ impl App {
                 ui.add_space(6.0);
 
                 let total = self.images.len();
-                if ui
-                    .selectable_label(
-                        self.active_collection.is_none(),
-                        format!("All Photos ({total})"),
-                    )
-                    .clicked()
+                if crate::ui::widgets::collection_row(
+                    ui,
+                    "All Photos",
+                    total,
+                    self.active_collection.is_none(),
+                )
+                .clicked()
                 {
                     self.active_collection = None;
                     self.visible_dirty = true;
@@ -883,9 +884,11 @@ impl App {
                 let mut delete_collection = None;
                 for col in &self.collections {
                     let selected = self.active_collection == Some(col.id);
-                    let resp = ui.selectable_label(
+                    let resp = crate::ui::widgets::collection_row(
+                        ui,
+                        &col.name,
+                        col.image_count,
                         selected,
-                        format!("{} ({})", col.name, col.image_count),
                     );
                     if resp.clicked() {
                         self.active_collection = Some(col.id);

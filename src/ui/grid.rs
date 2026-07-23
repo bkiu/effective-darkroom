@@ -168,7 +168,7 @@ fn cell(
     let selected = state.selection.contains(&rec.id);
     let painter = ui.painter();
     let bg = if selected {
-        ui.visuals().selection.bg_fill.gamma_multiply(0.4)
+        theme::accent().gamma_multiply(0.16)
     } else {
         theme::bg_raised()
     };
@@ -205,7 +205,7 @@ fn cell(
         painter.rect_stroke(
             rect,
             4.0,
-            egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
+            egui::Stroke::new(2.0, theme::accent()),
             egui::StrokeKind::Inside,
         );
     } else if response.hovered() {

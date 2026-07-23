@@ -67,7 +67,7 @@ pub fn show(
                         painter.rect_stroke(
                             rect,
                             3.0,
-                            egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
+                            egui::Stroke::new(2.0, theme::accent()),
                             egui::StrokeKind::Inside,
                         );
                     }
