@@ -52,12 +52,11 @@ pub fn show(
             {
                 action.open_export = true;
             }
+            if ui.button("⚙").on_hover_text("Settings").clicked() {
+                action.open_settings = true;
+            }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("⚙").on_hover_text("Settings").clicked() {
-                    action.open_settings = true;
-                }
-                ui.add_space(10.0);
                 widgets::segmented(
                     ui,
                     view,
