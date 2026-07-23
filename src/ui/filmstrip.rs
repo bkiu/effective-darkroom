@@ -30,7 +30,9 @@ pub fn show(
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.add_space(PAD);
-                for rec in images {
+                // `images` is newest-first; the strip runs as a timeline,
+                // older on the left and newest at the right end.
+                for rec in images.iter().rev() {
                     let (rect, response) =
                         ui.allocate_exact_size(Vec2::splat(STRIP_CELL), Sense::click());
                     let is_current = current == Some(rec.id);

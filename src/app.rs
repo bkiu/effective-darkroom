@@ -664,11 +664,13 @@ impl App {
         if key_x {
             self.set_flag_selection(Flag::Reject);
         }
+        // Timeline direction, matching the filmstrip: left = older,
+        // right = newer. `visible` is newest-first, so older is +1.
         if left {
-            self.step_current(-1);
+            self.step_current(1);
         }
         if right {
-            self.step_current(1);
+            self.step_current(-1);
         }
         let key_q = ctx.input(|i| i.key_pressed(egui::Key::Q));
         if key_g || key_q {
