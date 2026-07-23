@@ -25,7 +25,7 @@ fn main() -> eframe::Result {
         }
     }
 
-    let icon = image::load_from_memory(include_bytes!("../assets/icon.png"))
+    let icon = image::load_from_memory(include_bytes!("../assets/icon-small.png"))
         .map(|img| {
             let rgba = img.to_rgba8();
             let (width, height) = rgba.dimensions();
