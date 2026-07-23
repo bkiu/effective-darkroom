@@ -257,13 +257,13 @@ pub fn segmented<V: PartialEq + Copy>(
     let total: f32 = widths.iter().sum();
     let (outer, _) =
         ui.allocate_exact_size(Vec2::new(total + 8.0, height), Sense::hover());
-    // Pill container on a near-black well.
-    let pill = (height / 2.0) as u8;
-    ui.painter()
-        .rect_filled(outer, CornerRadius::same(pill), theme::bg_canvas());
+    // Recessed near-black well; rounding on the shared token scale so the
+    // control matches the rest of the UI (LG outer, MD segments ≈ concentric).
+    let well = CornerRadius::same(theme::RADIUS_LG);
+    ui.painter().rect_filled(outer, well, theme::bg_canvas());
     ui.painter().rect_stroke(
         outer,
-        CornerRadius::same(pill),
+        well,
         Stroke::new(1.0, theme::line_subtle()),
         egui::StrokeKind::Inside,
     );
@@ -276,13 +276,11 @@ pub fn segmented<V: PartialEq + Copy>(
         );
         let resp = ui.interact(seg, ui.id().with(("segment", label)), Sense::click());
         let active = *selected == *value;
-        let seg_pill = (seg.height() / 2.0) as u8;
+        let seg_radius = CornerRadius::same(theme::RADIUS_MD);
         if active {
-            ui.painter()
-                .rect_filled(seg, CornerRadius::same(seg_pill), theme::accent());
+            ui.painter().rect_filled(seg, seg_radius, theme::accent());
         } else if resp.hovered() {
-            ui.painter()
-                .rect_filled(seg, CornerRadius::same(seg_pill), theme::bg_raised());
+            ui.painter().rect_filled(seg, seg_radius, theme::bg_raised());
         }
         ui.painter().text(
             seg.center(),
