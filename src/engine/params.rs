@@ -137,9 +137,11 @@ mod tests {
 
     #[test]
     fn json_roundtrip_and_forward_compat() {
-        let mut p = EditParams::default();
-        p.exposure = 1.25;
-        p.wb_temp = 5200.0;
+        let p = EditParams {
+            exposure: 1.25,
+            wb_temp: 5200.0,
+            ..Default::default()
+        };
         let p2 = EditParams::from_json(&p.to_json());
         assert_eq!(p, p2);
 

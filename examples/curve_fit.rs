@@ -13,7 +13,7 @@ fn luma(px: &image::Rgb<u8>) -> f32 {
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     anyhow::ensure!(
-        !args.is_empty() && args.len() % 2 == 0,
+        !args.is_empty() && args.len().is_multiple_of(2),
         "usage: curve_fit ours1 adobe1 [ours2 adobe2 ...]"
     );
 

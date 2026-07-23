@@ -124,6 +124,33 @@ impl Jobs {
         let _ = self.thumb_tx.send(JobRequest::Thumb(rec));
     }
 
+    /// Warm the thumbnail disk cache for `records` on a single background
+    /// thread, so scrolling hits cached files instead of decoding on first
+    /// sight. Runs off the interactive thumb pool; already-cached images are
+    /// skipped, so overlapping prewarms (startup + post-import) are cheap.
+    pub fn start_thumb_prewarm(records: Vec<ImageRecord>) {
+        if records.is_empty() {
+            return;
+        }
+        let _ = std::thread::Builder::new()
+            .name("thumb-prewarm".into())
+            .spawn(move || {
+                let mut built = 0usize;
+                for rec in &records {
+                    match crate::decode::thumbs::warm(rec) {
+                        Ok(true) => built += 1,
+                        Ok(false) => {}
+                        Err(e) => {
+                            tracing::debug!("prewarm thumb {}: {e:#}", rec.file_name);
+                        }
+                    }
+                }
+                if built > 0 {
+                    tracing::info!("prewarmed {built} thumbnails");
+                }
+            });
+    }
+
     pub fn request_full_decode(&self, generation: u64, rec: ImageRecord) {
         let _ = self.full_tx.send(FullDecodeRequest { generation, rec });
     }

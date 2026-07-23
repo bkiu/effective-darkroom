@@ -292,12 +292,14 @@ mod tests {
 
     #[test]
     fn lut_monotone_and_full_range() {
-        let mut p = EditParams::default();
-        p.contrast = 80.0;
-        p.highlights = -70.0;
-        p.shadows = 60.0;
-        p.whites = 30.0;
-        p.blacks = -40.0;
+        let mut p = EditParams {
+            contrast: 80.0,
+            highlights: -70.0,
+            shadows: 60.0,
+            whites: 30.0,
+            blacks: -40.0,
+            ..Default::default()
+        };
         p.tone_curve.composite = vec![[0.0, 0.05], [0.5, 0.6], [1.0, 0.95]];
         let lut = build_lut(&p, None);
         for ch in [&lut.r, &lut.g, &lut.b] {

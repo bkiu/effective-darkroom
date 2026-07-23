@@ -200,36 +200,42 @@ pub fn show(
 
     facet_header(ui, "Date");
     for (std::cmp::Reverse(year), (count, months)) in &dates {
-        let mut on = state.years.contains(year);
-        if filter_row(ui, &mut on, &year.to_string(), *count) {
-            if on {
-                state.years.insert(*year);
-            } else {
-                state.years.remove(year);
+        // Year checkbox doubles as the header of a collapsible month list.
+        let id = ui.make_persistent_id(("filter-year", year));
+        egui::collapsing_header::CollapsingState::load_with_default_open(
+            ui.ctx(),
+            id,
+            false,
+        )
+        .show_header(ui, |ui| {
+            let mut on = state.years.contains(year);
+            if filter_row(ui, &mut on, &year.to_string(), *count) {
+                if on {
+                    state.years.insert(*year);
+                } else {
+                    state.years.remove(year);
+                }
+                changed = true;
             }
-            changed = true;
-        }
-        ui.horizontal_wrapped(|ui| {
-            ui.add_space(24.0);
+        })
+        .body_unindented(|ui| {
             for (month, mcount) in months.iter().rev() {
                 let key = (*year, *month);
-                let active = state.months.contains(&key);
-                if month_chip(
-                    ui,
-                    active,
-                    MONTH_NAMES[(*month - 1) as usize],
-                    *mcount,
-                ) {
-                    if active {
-                        state.months.remove(&key);
-                    } else {
-                        state.months.insert(key);
+                let mut on = state.months.contains(&key);
+                ui.horizontal(|ui| {
+                    ui.add_space(20.0);
+                    if filter_row(ui, &mut on, MONTH_NAMES[(*month - 1) as usize], *mcount)
+                    {
+                        if on {
+                            state.months.insert(key);
+                        } else {
+                            state.months.remove(&key);
+                        }
+                        changed = true;
                     }
-                    changed = true;
-                }
+                });
             }
         });
-        ui.add_space(2.0);
     }
 
     facet_header(ui, "Flags");
@@ -312,40 +318,4 @@ fn filter_row(ui: &mut egui::Ui, checked: &mut bool, label: &str, count: usize) 
         return true;
     }
     false
-}
-
-/// Small pill chip "July 77"; returns true when clicked.
-fn month_chip(ui: &mut egui::Ui, active: bool, name: &str, count: usize) -> bool {
-    let font = egui::FontId::new(11.5, egui::FontFamily::Proportional);
-    let text = format!("{name}  {count}");
-    let galley = ui
-        .painter()
-        .layout_no_wrap(text.clone(), font.clone(), egui::Color32::WHITE);
-    let size = galley.size() + Vec2::new(18.0, 8.0);
-    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
-    let pill = (rect.height() / 2.0) as u8;
-    let painter = ui.painter();
-    if active {
-        painter.rect_filled(rect, CornerRadius::same(pill), theme::accent());
-    } else {
-        painter.rect_filled(rect, CornerRadius::same(pill), theme::bg_raised());
-        painter.rect_stroke(
-            rect,
-            CornerRadius::same(pill),
-            Stroke::new(1.0, theme::line_subtle()),
-            egui::StrokeKind::Inside,
-        );
-    }
-    painter.text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        text,
-        font,
-        if active {
-            egui::Color32::WHITE
-        } else {
-            theme::text_secondary()
-        },
-    );
-    resp.clicked()
 }

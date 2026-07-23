@@ -212,6 +212,8 @@ impl App {
             Err(e) => panic!("cannot open catalog: {e:#}"),
         };
 
+        crate::jobs::Jobs::start_thumb_prewarm(images.clone());
+
         let mut import = ImportDialog::default();
         import.dest_root = config.library_root.clone();
         let library_prompt_open = config.library_root.is_none();
@@ -546,6 +548,7 @@ impl App {
                         Ok(imgs) => self.images = imgs,
                         Err(e) => tracing::error!("reload images: {e:#}"),
                     }
+                    crate::jobs::Jobs::start_thumb_prewarm(self.images.clone());
                     self.visible_dirty = true;
                 }
                 JobResult::ImportScanList {
@@ -982,6 +985,11 @@ impl App {
                 .clicked()
             {
                 self.filters.enabled = !self.filters.enabled;
+                if !self.filters.enabled {
+                    // Turning filtering off also resets it; re-enabling
+                    // starts from a clean slate.
+                    self.filters.clear();
+                }
                 self.visible_dirty = true;
             }
             if let Some(cid) = self.active_collection {

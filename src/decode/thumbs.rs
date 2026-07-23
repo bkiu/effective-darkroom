@@ -31,6 +31,21 @@ pub fn get_or_create(rec: &ImageRecord) -> Result<image::RgbaImage> {
     Ok(thumb.to_rgba8())
 }
 
+/// Ensure the disk-cache entry exists without returning pixels; used by the
+/// background prewarm. Returns true when a thumbnail was generated.
+pub fn warm(rec: &ImageRecord) -> Result<bool> {
+    let cached = cache_path(rec.id);
+    if cached.exists() {
+        return Ok(false);
+    }
+    let thumb = generate(rec)?;
+    thumb
+        .to_rgb8()
+        .save(&cached)
+        .with_context(|| format!("write thumb cache {}", cached.display()))?;
+    Ok(true)
+}
+
 fn generate(rec: &ImageRecord) -> Result<DynamicImage> {
     let img = match rec.kind {
         FileKind::Jpeg => {
