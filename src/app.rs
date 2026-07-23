@@ -142,9 +142,9 @@ pub struct App {
     /// None = All Photos.
     active_collection: Option<i64>,
     collection_members: std::collections::HashSet<i64>,
-    filter_pick: bool,
-    filter_unflagged: bool,
-    filter_reject: bool,
+    filters: crate::ui::filters::FilterState,
+    /// Ids of images with stored edits (for the Edited filter facet).
+    edited_ids: std::collections::HashSet<i64>,
     /// In-progress "new collection" name entry in the side panel.
     new_collection_name: Option<String>,
     new_collection_focus_pending: bool,
@@ -251,9 +251,8 @@ impl App {
             collections,
             active_collection: None,
             collection_members: Default::default(),
-            filter_pick: true,
-            filter_unflagged: true,
-            filter_reject: true,
+            filters: Default::default(),
+            edited_ids: Default::default(),
             new_collection_name: None,
             new_collection_focus_pending: false,
             jobs: Jobs::new(cc.egui_ctx.clone()),
@@ -305,19 +304,15 @@ impl App {
         if let Some(cid) = self.active_collection {
             self.collection_members = self.catalog.collection_image_ids(cid).unwrap_or_default();
         }
+        self.edited_ids = self.catalog.edited_image_ids().unwrap_or_default();
         let in_collection = |r: &ImageRecord| match self.active_collection {
             Some(_) => self.collection_members.contains(&r.id),
             None => true,
         };
-        let passes_flag = |r: &ImageRecord| match r.flag {
-            Flag::Pick => self.filter_pick,
-            Flag::Unflagged => self.filter_unflagged,
-            Flag::Reject => self.filter_reject,
-        };
         self.visible = self
             .images
             .iter()
-            .filter(|r| in_collection(r) && passes_flag(r))
+            .filter(|r| in_collection(r) && self.filters.matches(r, &self.edited_ids))
             .cloned()
             .collect();
         // Drop selection entries that are no longer visible.
@@ -424,6 +419,8 @@ impl App {
                     tracing::error!("save edit for {}: {e:#}", cur.id);
                 } else {
                     cur.saved_params = cur.params.clone();
+                    // Keep the Edited filter facet current.
+                    self.visible_dirty = true;
                 }
             }
             cur.dirty_since = None;
@@ -837,18 +834,36 @@ impl App {
                 }
             }
         }
+        self.visible_dirty = true;
     }
 
     /// Left side panel: collection list with create/delete.
     fn show_collections_panel(&mut self, ui: &mut egui::Ui) {
         egui::Panel::left("collections")
-            .default_size(210.0)
+            .default_size(230.0)
             .resizable(true)
             .show(ui, |ui| {
-                egui::Frame::new()
-                    .inner_margin(egui::Margin::symmetric(10, 10))
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        self.collections_panel_contents(ui);
+                        egui::Frame::new()
+                            .inner_margin(egui::Margin::symmetric(10, 10))
+                            .show(ui, |ui| {
+                                self.collections_panel_contents(ui);
+                                if self.filters.enabled {
+                                    ui.add_space(14.0);
+                                    ui.separator();
+                                    ui.add_space(6.0);
+                                    if crate::ui::filters::show(
+                                        ui,
+                                        &mut self.filters,
+                                        &self.images,
+                                        &self.edited_ids,
+                                    ) {
+                                        self.visible_dirty = true;
+                                    }
+                                }
+                            });
                     });
             });
     }
@@ -951,32 +966,22 @@ impl App {
                 }
     }
 
-    /// Flag filter row above the grid.
+    /// Toolbar above the grid: the Filters toggle and the photo count.
     fn show_filter_row(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
-        let (n_pick, n_reject) = self.images.iter().fold((0, 0), |(p, r), rec| {
-            match rec.flag {
-                Flag::Pick => (p + 1, r),
-                Flag::Reject => (p, r + 1),
-                Flag::Unflagged => (p, r),
-            }
-        });
-        let n_unflagged = self.images.len() - n_pick - n_reject;
         ui.horizontal(|ui| {
             ui.add_space(14.0);
-            ui.label(egui::RichText::new("Show:").weak());
-            for (label, on, hover) in [
-                ("⚑", &mut self.filter_pick, format!("Picked ({n_pick})")),
-                ("⚐", &mut self.filter_unflagged, format!("Unflagged ({n_unflagged})")),
-                ("✖", &mut self.filter_reject, format!("Rejected ({n_reject})")),
-            ] {
-                if crate::ui::theme::toggle_button(ui, *on, label)
-                    .on_hover_text(hover)
-                    .clicked()
-                {
-                    *on = !*on;
-                    self.visible_dirty = true;
-                }
+            let label = if self.filters.any_active() && self.filters.enabled {
+                "Filters ●"
+            } else {
+                "Filters"
+            };
+            if crate::ui::theme::toggle_button(ui, self.filters.enabled, label)
+                .on_hover_text("Enable filtering and show the filter panel")
+                .clicked()
+            {
+                self.filters.enabled = !self.filters.enabled;
+                self.visible_dirty = true;
             }
             if let Some(cid) = self.active_collection {
                 if let Some(col) = self.collections.iter().find(|c| c.id == cid) {

@@ -3,6 +3,7 @@ pub mod delete_dialog;
 pub mod develop_panel;
 pub mod export_dialog;
 pub mod filmstrip;
+pub mod filters;
 pub mod grid;
 pub mod import_dialog;
 pub mod loupe;

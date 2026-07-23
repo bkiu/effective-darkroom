@@ -241,6 +241,13 @@ impl Catalog {
             .optional()?)
     }
 
+    /// Ids of images that have stored develop edits.
+    pub fn edited_image_ids(&self) -> Result<std::collections::HashSet<i64>> {
+        let mut stmt = self.conn.prepare("SELECT image_id FROM edits")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
     /// Flush the WAL into the main database file (before moving it).
     pub fn checkpoint(&self) -> Result<()> {
         self.conn
