@@ -195,10 +195,12 @@ pub fn apply(ctx: &egui::Context) {
     install_fonts(ctx);
 
     ctx.all_styles_mut(|style| {
-        // Type scale.
+        // Type scale. Heading is only consumed by window title bars (the top
+        // bar uses heading_font() directly), so it sits at Section size to
+        // keep modal title bars compact.
         style
             .text_styles
-            .insert(egui::TextStyle::Heading, heading_font());
+            .insert(egui::TextStyle::Heading, FontId::new(15.0, semibold()));
         style.text_styles.insert(egui::TextStyle::Body, body_font());
         style
             .text_styles
@@ -214,7 +216,9 @@ pub fn apply(ctx: &egui::Context) {
         style.spacing.item_spacing = Vec2::new(8.0, 6.0);
         style.spacing.button_padding = Vec2::new(12.0, 5.0);
         style.spacing.menu_margin = Margin::same(8);
-        style.spacing.window_margin = Margin::same(16);
+        // The vertical margin also pads the title bar above and below the
+        // title, so it stays tighter than the horizontal margin.
+        style.spacing.window_margin = Margin::symmetric(16, 10);
 
         let v = &mut style.visuals;
         v.dark_mode = true;
