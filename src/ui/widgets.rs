@@ -198,13 +198,7 @@ pub fn segmented<V: PartialEq + Copy>(
             ui.painter().rect_filled(
                 seg,
                 CornerRadius::same(theme::RADIUS_SM),
-                theme::bg_hover(),
-            );
-            ui.painter().rect_stroke(
-                seg,
-                CornerRadius::same(theme::RADIUS_SM),
-                Stroke::new(1.0, theme::accent()),
-                egui::StrokeKind::Inside,
+                theme::accent(),
             );
         } else if resp.hovered() {
             ui.painter().rect_filled(
@@ -219,7 +213,7 @@ pub fn segmented<V: PartialEq + Copy>(
             label,
             font.clone(),
             if active {
-                theme::text_primary()
+                theme::on_accent()
             } else {
                 theme::text_muted()
             },

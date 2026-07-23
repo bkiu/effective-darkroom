@@ -41,7 +41,6 @@ fn main() -> eframe::Result {
         .with_inner_size([1440.0, 900.0])
         .with_min_inner_size([900.0, 600.0])
         .with_title("Effective Darkroom")
-        .with_decorations(false)
         .with_app_id("effective-darkroom");
     if let Some(icon) = icon {
         viewport = viewport.with_icon(icon);
