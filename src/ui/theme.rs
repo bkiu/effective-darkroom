@@ -218,7 +218,7 @@ pub fn apply(ctx: &egui::Context) {
 
         let v = &mut style.visuals;
         v.dark_mode = true;
-        v.override_text_color = Some(text_secondary());
+        v.override_text_color = None;
         v.panel_fill = bg_panel();
         v.window_fill = bg_panel();
         v.extreme_bg_color = bg_canvas();
@@ -226,6 +226,16 @@ pub fn apply(ctx: &egui::Context) {
         v.window_stroke = Stroke::new(1.0, line_subtle());
         v.window_corner_radius = CornerRadius::same(RADIUS_LG);
         v.menu_corner_radius = CornerRadius::same(RADIUS_MD);
+
+        for w in [
+            &mut v.widgets.noninteractive,
+            &mut v.widgets.inactive,
+            &mut v.widgets.hovered,
+            &mut v.widgets.active,
+            &mut v.widgets.open,
+        ] {
+            w.expansion = 0.0;
+        }
 
         v.widgets.noninteractive.bg_fill = bg_panel();
         v.widgets.noninteractive.weak_bg_fill = bg_panel();
@@ -259,7 +269,7 @@ pub fn apply(ctx: &egui::Context) {
         // Solid accent for selected/active states (design: filled cyan with
         // white content), not a dimmed tint.
         v.selection.bg_fill = accent();
-        v.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+        v.selection.stroke = Stroke::new(1.5, Color32::WHITE);
         v.hyperlink_color = accent();
         v.error_fg_color = danger();
         v.warn_fg_color = flag_pick();
