@@ -230,7 +230,7 @@ impl App {
             }
         }
 
-        let logo = image::load_from_memory(include_bytes!("../assets/icon.png"))
+        let logo = image::load_from_memory(include_bytes!("../assets/icon-small.png"))
             .ok()
             .map(|img| {
                 let rgba = img.to_rgba8();

@@ -34,7 +34,7 @@ pub fn show(
     tex: Option<(egui::TextureId, Vec2)>,
     loading: bool,
     info: Option<&[String]>,
-    mut crop: Option<&mut crate::ui::crop_overlay::CropEdit<'_>>,
+    crop: Option<&mut crate::ui::crop_overlay::CropEdit<'_>>,
     straighten: bool,
 ) -> LoupeResponse {
     let mut out = LoupeResponse::default();
