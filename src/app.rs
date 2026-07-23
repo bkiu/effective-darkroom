@@ -971,8 +971,9 @@ impl App {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.add_space(14.0);
+            // ✖ (U+2716) is in NotoEmoji's coverage; plain × and ✕ are tofu.
             let label = if self.filters.any_active() && self.filters.enabled {
-                "Filters •"
+                "Filters ✖"
             } else {
                 "Filters"
             };
