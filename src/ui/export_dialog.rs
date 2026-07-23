@@ -103,7 +103,7 @@ impl ExportDialog {
         egui::Window::new("Export Photos")
             .open(&mut open)
             .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.screen_rect().center())
+            .default_pos(ctx.content_rect().center())
             .collapsible(false)
             .resizable(false)
             .default_width(440.0)

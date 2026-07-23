@@ -179,7 +179,7 @@ impl ImportDialog {
         egui::Window::new("Import Photos")
             .open(&mut open)
             .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.screen_rect().center())
+            .default_pos(ctx.content_rect().center())
             .collapsible(false)
             .resizable(true)
             .default_width(640.0)
