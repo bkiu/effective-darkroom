@@ -293,19 +293,19 @@ pub fn section<R>(
     result.body_returned
 }
 
-/// Toggle button with a constant border: raised fill + subtle stroke when
-/// inactive, solid accent with white text when active. Unlike
-/// `selectable_label`, hovering never adds chrome that wasn't there.
+/// Toggle button: flat (stroke matches the fill, so no visible border) when
+/// inactive, solid accent with white text when active. Distinguishes
+/// toggles from real push buttons, and hovering never shifts anything.
 pub fn toggle_button(ui: &mut egui::Ui, active: bool, text: &str) -> egui::Response {
-    let (fill, stroke, color) = if active {
-        (accent(), Stroke::new(1.0, accent()), Color32::WHITE)
+    let (fill, color) = if active {
+        (accent(), Color32::WHITE)
     } else {
-        (bg_raised(), Stroke::new(1.0, line_subtle()), text_secondary())
+        (bg_raised(), text_secondary())
     };
     ui.add(
         egui::Button::new(egui::RichText::new(text).color(color))
             .fill(fill)
-            .stroke(stroke)
+            .stroke(Stroke::new(1.0, fill))
             .corner_radius(CornerRadius::same(RADIUS_MD)),
     )
 }

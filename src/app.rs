@@ -972,7 +972,7 @@ impl App {
         ui.horizontal(|ui| {
             ui.add_space(14.0);
             let label = if self.filters.any_active() && self.filters.enabled {
-                "Filters ●"
+                "Filters •"
             } else {
                 "Filters"
             };

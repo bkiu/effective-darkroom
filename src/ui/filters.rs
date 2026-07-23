@@ -168,7 +168,12 @@ pub fn show(
     ui.horizontal(|ui| {
         ui.label(theme::overline_text("Filters"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if state.any_active() && ui.small_button("Clear").clicked() {
+            // Always occupy the space so the column doesn't jump when the
+            // button appears/disappears.
+            if ui
+                .add_visible(state.any_active(), egui::Button::new("Clear").small())
+                .clicked()
+            {
                 state.clear();
                 changed = true;
             }
