@@ -17,6 +17,8 @@ pub struct Adjustment<'a> {
     pub decimals: usize,
     /// Log-scale mapping (Kelvin temperature).
     pub logarithmic: bool,
+    /// Increment for arrow keys while editing the value.
+    pub step: f32,
 }
 
 const LABEL_W: f32 = 72.0;
@@ -143,17 +145,77 @@ impl Adjustment<'_> {
                 Stroke::new(1.0, theme::bg_canvas()),
             );
 
-            // Mono value readout.
-            ui.add_sized(
-                [VALUE_W, ROW_H],
-                egui::Label::new(
+            // Mono value readout; click to edit, arrows step while editing.
+            let edit_id = ui.id().with(("adjust-edit", self.label));
+            let editing: Option<String> =
+                ui.memory(|m| m.data.get_temp(edit_id));
+            if let Some(mut text) = editing {
+                let te = egui::TextEdit::singleline(&mut text)
+                    .font(egui::FontId::new(12.5, theme::mono()))
+                    .horizontal_align(egui::Align::RIGHT)
+                    .margin(egui::Margin::symmetric(4, 2));
+                let te_resp = ui.add_sized([VALUE_W, ROW_H], te);
+                te_resp.request_focus();
+
+                let mut commit_value = |ui: &egui::Ui, txt: &str| {
+                    if let Ok(v) = txt.trim().parse::<f32>() {
+                        let v = v.clamp(self.min, self.max);
+                        if v != *self.value {
+                            *self.value = v;
+                            changed = true;
+                        }
+                    }
+                    let _ = ui; // silence unused in some paths
+                };
+
+                let (up, down, enter, escape) = ui.input(|i| {
+                    (
+                        i.key_pressed(egui::Key::ArrowUp),
+                        i.key_pressed(egui::Key::ArrowDown),
+                        i.key_pressed(egui::Key::Enter),
+                        i.key_pressed(egui::Key::Escape),
+                    )
+                });
+                if up || down {
+                    let base = text.trim().parse::<f32>().unwrap_or(*self.value);
+                    let stepped = (base + if up { self.step } else { -self.step })
+                        .clamp(self.min, self.max);
+                    if stepped != *self.value {
+                        *self.value = stepped;
+                        changed = true;
+                    }
+                    text = self.format();
+                    ui.memory_mut(|m| m.data.insert_temp(edit_id, text.clone()));
+                } else if escape {
+                    ui.memory_mut(|m| m.data.remove_temp::<String>(edit_id));
+                } else if enter || te_resp.lost_focus() {
+                    commit_value(ui, &text);
+                    ui.memory_mut(|m| m.data.remove_temp::<String>(edit_id));
+                } else {
+                    ui.memory_mut(|m| m.data.insert_temp(edit_id, text.clone()));
+                }
+            } else {
+                let label = egui::Label::new(
                     theme::mono_text(&self.format()).color(if fill_active {
                         theme::text_primary()
                     } else {
                         theme::text_muted()
                     }),
-                ),
-            );
+                )
+                .sense(Sense::click());
+                let lresp = ui.add_sized([VALUE_W, ROW_H], label);
+                if lresp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                }
+                if lresp.clicked() {
+                    let raw = if self.decimals == 0 {
+                        format!("{}", self.value.round() as i64)
+                    } else {
+                        format!("{:.prec$}", *self.value, prec = self.decimals)
+                    };
+                    ui.memory_mut(|m| m.data.insert_temp(edit_id, raw));
+                }
+            }
         });
         changed
     }

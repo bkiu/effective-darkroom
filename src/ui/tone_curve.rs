@@ -46,7 +46,6 @@ pub fn show(
     let mut changed = false;
 
     ui.horizontal(|ui| {
-        ui.label(theme::overline_text("Tone Curve"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.small_button("Linear").clicked() {
                 *active_points_mut(curves, state.channel) = vec![[0.0, 0.0], [1.0, 1.0]];

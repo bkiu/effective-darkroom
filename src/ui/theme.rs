@@ -277,6 +277,22 @@ pub fn apply(ctx: &egui::Context) {
     });
 }
 
+/// Collapsible panel section with an overline header; open state persists
+/// in egui memory.
+pub fn section<R>(
+    ui: &mut egui::Ui,
+    title: &str,
+    default_open: bool,
+    content: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<R> {
+    let result = egui::CollapsingHeader::new(overline_text(title))
+        .id_salt(("panel-section", title))
+        .default_open(default_open)
+        .show(ui, content);
+    ui.add_space(6.0);
+    result.body_returned
+}
+
 /// Primary (accent-filled) button, per the design's `primary` spec.
 pub fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     let rich = egui::RichText::new(text).color(on_accent()).font(FontId::new(

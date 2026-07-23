@@ -8,6 +8,8 @@ pub struct LoupeState {
     pub one_to_one: bool,
     /// Pan offset in image pixels at 1:1.
     pub pan: Vec2,
+    /// Anchor of the straighten line being drawn (screen coords).
+    line_start: Option<Pos2>,
 }
 
 impl LoupeState {
@@ -17,17 +19,25 @@ impl LoupeState {
     }
 }
 
+#[derive(Default)]
+pub struct LoupeResponse {
+    pub crop_changed: bool,
+    /// Angle correction from a completed straighten-line drag (additive).
+    pub straighten_delta: Option<f32>,
+}
+
 /// Draw the rendered image (if any) into the available space, with an
-/// optional EXIF info overlay and an optional crop-edit overlay (crop tool).
-/// Returns true when the crop rect changed.
+/// optional EXIF info overlay, crop-edit overlay, and straighten line tool.
 pub fn show(
     ui: &mut egui::Ui,
     state: &mut LoupeState,
     tex: Option<(egui::TextureId, Vec2)>,
     loading: bool,
     info: Option<&[String]>,
-    crop: Option<&mut crate::ui::crop_overlay::CropEdit<'_>>,
-) -> bool {
+    mut crop: Option<&mut crate::ui::crop_overlay::CropEdit<'_>>,
+    straighten: bool,
+) -> LoupeResponse {
+    let mut out = LoupeResponse::default();
     let mut crop_changed = false;
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     ui.painter().rect_filled(rect, 0.0, Color32::from_gray(16));
@@ -44,17 +54,17 @@ pub fn show(
                 Color32::from_gray(120),
             );
         }
-        return false;
+        return out;
     };
 
     let cropping = crop.is_some();
-    if cropping {
+    if cropping || straighten {
         // Crop tool: always fit, no pan/zoom; drags belong to the overlay.
         state.one_to_one = false;
         state.pan = Vec2::ZERO;
     }
 
-    if !cropping && response.double_clicked() {
+    if !cropping && !straighten && response.double_clicked() {
         state.one_to_one = !state.one_to_one;
         // Center the zoom on the click point.
         if state.one_to_one {
@@ -99,6 +109,47 @@ pub fn show(
     }
     ui.painter().image(tex_id, draw_rect, uv, Color32::WHITE);
 
+    if straighten {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        if response.drag_started() {
+            state.line_start = response.interact_pointer_pos();
+        }
+        if let (Some(a), Some(b)) = (state.line_start, response.interact_pointer_pos()) {
+            if response.dragged() || response.drag_stopped() {
+                let painter = ui.painter();
+                painter.line_segment(
+                    [a, b],
+                    egui::Stroke::new(1.5, crate::ui::theme::accent()),
+                );
+                painter.circle_filled(a, 3.0, crate::ui::theme::accent());
+                painter.circle_filled(b, 3.0, crate::ui::theme::accent());
+            }
+            if response.drag_stopped() {
+                let d = b - a;
+                if d.length() > 20.0 {
+                    // Fold the line angle to its deviation from the nearest
+                    // axis; rotating by the negative deviation levels it.
+                    let raw = d.y.atan2(d.x).to_degrees();
+                    let mut dev = raw.rem_euclid(90.0);
+                    if dev >= 45.0 {
+                        dev -= 90.0;
+                    }
+                    out.straighten_delta = Some(-dev);
+                }
+                state.line_start = None;
+            }
+        }
+        if state.line_start.is_some()
+            && !response.dragged()
+            && !response.drag_stopped()
+            && !response.is_pointer_button_down_on()
+        {
+            state.line_start = None;
+        }
+    } else {
+        state.line_start = None;
+    }
+
     if let Some(edit) = crop {
         crop_changed = crate::ui::crop_overlay::show(ui, draw_rect, edit);
     }
@@ -114,7 +165,8 @@ pub fn show(
             egui::Spinner::new().size(20.0),
         );
     }
-    crop_changed
+    out.crop_changed = crop_changed;
+    out
 }
 
 fn draw_info_overlay(ui: &egui::Ui, rect: Rect, lines: &[String]) {

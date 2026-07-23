@@ -276,6 +276,7 @@ impl App {
             crop_ui: develop_panel::CropUiState {
                 // ED_STARTUP_CROP=1: open with the crop tool active (dev hook)
                 tool_active: std::env::var("ED_STARTUP_CROP").is_ok(),
+                line_tool_active: false,
                 aspect: Default::default(),
                 auto_pending: false,
                 auto_failed: false,
@@ -1410,6 +1411,7 @@ impl eframe::App for App {
                                 loading,
                                 info.as_deref(),
                                 None,
+                                false,
                             );
                         }
                     }
@@ -1511,15 +1513,25 @@ impl eframe::App for App {
                             }
                         }
                     }
-                    let crop_changed = loupe::show(
+                    let lresp = loupe::show(
                         ui,
                         &mut self.loupe,
                         self.rendered,
                         loading,
                         info.as_deref(),
                         edit_storage.as_mut(),
+                        self.crop_ui.line_tool_active,
                     );
-                    if crop_changed {
+                    if let Some(delta) = lresp.straighten_delta {
+                        if let Some(cur) = &mut self.current {
+                            cur.params.crop.angle =
+                                (cur.params.crop.angle + delta).clamp(-45.0, 45.0);
+                            cur.dirty_since = Some(Instant::now());
+                        }
+                        // One line per activation, like Lightroom's ruler.
+                        self.crop_ui.line_tool_active = false;
+                    }
+                    if lresp.crop_changed {
                         if let Some(cur) = &mut self.current {
                             cur.dirty_since = Some(Instant::now());
                         }
