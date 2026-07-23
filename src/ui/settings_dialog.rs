@@ -41,7 +41,7 @@ impl SettingsDialog {
         &mut self,
         ctx: &egui::Context,
         library_root: Option<&PathBuf>,
-        catalog_dir: &PathBuf,
+        catalog_dir: &std::path::Path,
     ) -> SettingsAction {
         if !self.open {
             return SettingsAction::None;
