@@ -202,11 +202,26 @@ impl ImportDialog {
     fn configure_ui(&mut self, ui: &mut egui::Ui, action: &mut DialogAction) {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.source_kind, SourceKind::Files, "Files / Folders");
-            let was_camera = self.source_kind == SourceKind::Camera;
-            ui.selectable_value(&mut self.source_kind, SourceKind::Camera, "📷 Camera");
-            if self.source_kind == SourceKind::Camera && !was_camera && self.cameras.is_empty() {
-                self.refresh_cameras();
+            if crate::ui::theme::toggle_button(
+                ui,
+                self.source_kind == SourceKind::Files,
+                "Files / Folders",
+            )
+            .clicked()
+            {
+                self.source_kind = SourceKind::Files;
+            }
+            if crate::ui::theme::toggle_button(
+                ui,
+                self.source_kind == SourceKind::Camera,
+                "📷 Camera",
+            )
+            .clicked()
+            {
+                self.source_kind = SourceKind::Camera;
+                if self.cameras.is_empty() {
+                    self.refresh_cameras();
+                }
             }
         });
         ui.add_space(6.0);

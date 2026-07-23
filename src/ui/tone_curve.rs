@@ -61,12 +61,7 @@ pub fn show(
             ("B", Channel::Blue),
         ] {
             let selected = state.channel == ch;
-            let text = egui::RichText::new(label).color(if selected {
-                ch.color()
-            } else {
-                Color32::from_gray(110)
-            });
-            if ui.selectable_label(selected, text).clicked() {
+            if theme::toggle_button(ui, selected, label).clicked() {
                 state.channel = ch;
                 state.drag = None;
             }

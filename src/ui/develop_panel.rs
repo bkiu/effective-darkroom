@@ -73,8 +73,7 @@ pub fn show(
 
             theme::section(ui, "Crop", true, |ui| {
                 ui.horizontal(|ui| {
-                    if ui
-                        .selectable_label(crop_ui.tool_active, "✂ Crop")
+                    if theme::toggle_button(ui, crop_ui.tool_active, "✂ Crop")
                         .on_hover_text("Toggle the crop overlay (rule-of-thirds grid)")
                         .clicked()
                     {
@@ -109,8 +108,7 @@ pub fn show(
 
             theme::section(ui, "Straighten", true, |ui| {
                 ui.horizontal(|ui| {
-                    if ui
-                        .selectable_label(crop_ui.line_tool_active, "📐 Draw line")
+                    if theme::toggle_button(ui, crop_ui.line_tool_active, "📐 Draw line")
                         .on_hover_text(
                             "Drag a line along something that should be level or \
                              plumb; the image rotates to match",

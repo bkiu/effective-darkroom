@@ -147,6 +147,7 @@ impl Adjustment<'_> {
 
             // Mono value readout; click to edit, arrows step while editing.
             let edit_id = ui.id().with(("adjust-edit", self.label));
+            let focus_id = ui.id().with(("adjust-edit-focus", self.label));
             let editing: Option<String> =
                 ui.memory(|m| m.data.get_temp(edit_id));
             if let Some(mut text) = editing {
@@ -155,7 +156,14 @@ impl Adjustment<'_> {
                     .horizontal_align(egui::Align::RIGHT)
                     .margin(egui::Margin::symmetric(4, 2));
                 let te_resp = ui.add_sized([VALUE_W, ROW_H], te);
-                te_resp.request_focus();
+                // Focus only on entry; re-requesting every frame would keep
+                // the field alive forever (lost_focus could never fire).
+                let focus_pending: bool =
+                    ui.memory(|m| m.data.get_temp(focus_id).unwrap_or(false));
+                if focus_pending {
+                    te_resp.request_focus();
+                    ui.memory_mut(|m| m.data.insert_temp(focus_id, false));
+                }
 
                 let mut commit_value = |ui: &egui::Ui, txt: &str| {
                     if let Ok(v) = txt.trim().parse::<f32>() {
@@ -213,7 +221,10 @@ impl Adjustment<'_> {
                     } else {
                         format!("{:.prec$}", *self.value, prec = self.decimals)
                     };
-                    ui.memory_mut(|m| m.data.insert_temp(edit_id, raw));
+                    ui.memory_mut(|m| {
+                        m.data.insert_temp(edit_id, raw);
+                        m.data.insert_temp(focus_id, true);
+                    });
                 }
             }
         });

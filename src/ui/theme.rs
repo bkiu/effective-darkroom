@@ -293,6 +293,23 @@ pub fn section<R>(
     result.body_returned
 }
 
+/// Toggle button with a constant border: raised fill + subtle stroke when
+/// inactive, solid accent with white text when active. Unlike
+/// `selectable_label`, hovering never adds chrome that wasn't there.
+pub fn toggle_button(ui: &mut egui::Ui, active: bool, text: &str) -> egui::Response {
+    let (fill, stroke, color) = if active {
+        (accent(), Stroke::new(1.0, accent()), Color32::WHITE)
+    } else {
+        (bg_raised(), Stroke::new(1.0, line_subtle()), text_secondary())
+    };
+    ui.add(
+        egui::Button::new(egui::RichText::new(text).color(color))
+            .fill(fill)
+            .stroke(stroke)
+            .corner_radius(CornerRadius::same(RADIUS_MD)),
+    )
+}
+
 /// Primary (accent-filled) button, per the design's `primary` spec.
 pub fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     let rich = egui::RichText::new(text).color(on_accent()).font(FontId::new(

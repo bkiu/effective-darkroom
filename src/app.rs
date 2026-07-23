@@ -970,8 +970,7 @@ impl App {
                 ("⚐", &mut self.filter_unflagged, format!("Unflagged ({n_unflagged})")),
                 ("✖", &mut self.filter_reject, format!("Rejected ({n_reject})")),
             ] {
-                if ui
-                    .selectable_label(*on, label)
+                if crate::ui::theme::toggle_button(ui, *on, label)
                     .on_hover_text(hover)
                     .clicked()
                 {
@@ -1076,8 +1075,7 @@ impl App {
                     ("✖ Reject", Flag::Reject, "Flag as reject (X)"),
                 ] {
                     let active = flag == value;
-                    if ui
-                        .selectable_label(active, label)
+                    if crate::ui::theme::toggle_button(ui, active, label)
                         .on_hover_text(hover)
                         .clicked()
                         && !active

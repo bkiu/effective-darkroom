@@ -25,18 +25,19 @@ pub fn show(
         .inner_margin(egui::Margin::symmetric(12, 10));
     egui::Panel::top("top_bar").frame(frame).show(ui, |ui| {
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
             if let Some(logo) = logo {
                 ui.add(
                     egui::Image::new(logo).fit_to_exact_size(egui::Vec2::splat(24.0)),
                 );
-                ui.add_space(4.0);
             }
             ui.label(
                 egui::RichText::new("Effective Darkroom")
                     .font(theme::heading_font())
                     .color(theme::text_primary()),
             );
-            ui.add_space(14.0);
+            ui.add_space(10.0);
+            ui.spacing_mut().item_spacing.x = 8.0;
             if ui.button("Import…").clicked() {
                 action.open_import = true;
             }
