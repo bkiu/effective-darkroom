@@ -88,10 +88,18 @@ and move the catalog + thumbnail cache to another folder.
   tests (respect `XDG_DATA_HOME` for a scratch catalog)
 - `probe` (in `crates/libraw-ffi`) — LibRaw metadata/thumb/decode smoke test
 
+## Design
+
+The UI follows the design system in `docs/design-system.html` (v2, dark):
+oklch-authored tokens, IBM Plex Sans for interface text, IBM Plex Mono for
+all numeric readouts, bipolar center-fill adjustment sliders, and custom
+window chrome. Reference `src/ui/theme.rs` tokens in code — never hardcode
+colors.
+
 ## Credits
 
-- UI font: [Inter](https://rsms.me/inter/) (SIL Open Font License 1.1),
-  bundled at `assets/fonts/Inter.ttf`.
+- UI fonts: [IBM Plex](https://www.ibm.com/plex/) Sans & Mono (OFL 1.1),
+  bundled in `assets/fonts/`.
 
 ## Machine-specific notes
 

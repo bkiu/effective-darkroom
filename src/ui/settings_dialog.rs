@@ -56,7 +56,7 @@ impl SettingsDialog {
             .default_width(480.0)
             .show(ctx, |ui| {
                 ui.add_space(4.0);
-                ui.label(egui::RichText::new("Library").strong());
+                ui.label(crate::ui::theme::overline_text("Library"));
                 ui.add_space(4.0);
                 ui.label("Default location for imported photos:");
                 ui.label(
@@ -99,9 +99,7 @@ impl SettingsDialog {
                         .small(),
                     );
                     ui.horizontal(|ui| {
-                        if ui
-                            .button(egui::RichText::new("Move library").strong())
-                            .clicked()
+                        if crate::ui::theme::primary_button(ui, "Move library").clicked()
                         {
                             action = SettingsAction::StartLibraryMove(dest.clone());
                             self.pending_library_move = None;
@@ -162,7 +160,7 @@ impl SettingsDialog {
                 ui.add_space(10.0);
                 ui.separator();
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new("Catalog").strong());
+                ui.label(crate::ui::theme::overline_text("Catalog"));
                 ui.add_space(4.0);
                 ui.label("Database and thumbnail cache:");
                 ui.label(egui::RichText::new(catalog_dir.display().to_string()).weak());

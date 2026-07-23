@@ -1,7 +1,9 @@
 use crate::app::View;
+use crate::ui::{theme, widgets};
 
-/// Top bar: logo + app title on the left, module tabs (Library / Develop)
-/// on the right, like Lightroom's module picker.
+/// Top bar doubles as the window titlebar (custom chrome): logo + title on
+/// the left, actions, segmented module switcher and window controls on the
+/// right. Empty space drags the window; double-click toggles maximize.
 pub struct TopBarAction {
     pub open_import: bool,
     pub open_export: bool,
@@ -19,29 +21,27 @@ pub fn show(
         open_export: false,
         open_settings: false,
     };
-    egui::Panel::top("top_bar").show(ui, |ui| {
-        ui.add_space(8.0);
+    let frame = egui::Frame::new()
+        .fill(theme::bg_canvas())
+        .inner_margin(egui::Margin::symmetric(12, 10));
+    egui::Panel::top("top_bar").frame(frame).show(ui, |ui| {
+        let bar_rect = ui.max_rect();
         ui.horizontal(|ui| {
-            ui.add_space(12.0);
             if let Some(logo) = logo {
                 ui.add(
-                    egui::Image::new(logo)
-                        .fit_to_exact_size(egui::Vec2::splat(26.0)),
+                    egui::Image::new(logo).fit_to_exact_size(egui::Vec2::splat(24.0)),
                 );
-                ui.add_space(6.0);
+                ui.add_space(4.0);
             }
             ui.label(
                 egui::RichText::new("Effective Darkroom")
-                    .strong()
-                    .size(18.0),
+                    .font(theme::heading_font())
+                    .color(theme::text_primary()),
             );
-            ui.add_space(10.0);
-            ui.separator();
-            ui.add_space(6.0);
+            ui.add_space(14.0);
             if ui.button("Import…").clicked() {
                 action.open_import = true;
             }
-            ui.add_space(2.0);
             let export_label = if selection_count > 1 {
                 format!("Export ({selection_count})…")
             } else {
@@ -55,30 +55,56 @@ pub fn show(
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_space(12.0);
+                // Window controls.
+                let ctx = ui.ctx().clone();
                 if ui
-                    .button("⚙")
-                    .on_hover_text("Settings")
+                    .button(egui::RichText::new("✖").color(theme::text_secondary()))
+                    .on_hover_text("Close")
                     .clicked()
                 {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                if ui
+                    .button(egui::RichText::new("☐").color(theme::text_secondary()))
+                    .on_hover_text("Maximize")
+                    .clicked()
+                {
+                    let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                }
+                if ui
+                    .button(egui::RichText::new("–").color(theme::text_secondary()))
+                    .on_hover_text("Minimize")
+                    .clicked()
+                {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                }
+                ui.add_space(10.0);
+                if ui.button("⚙").on_hover_text("Settings").clicked() {
                     action.open_settings = true;
                 }
-                ui.add_space(6.0);
-                for (label, v) in [("Develop", View::Develop), ("Library", View::Library)] {
-                    let selected = *view == v;
-                    let text = if selected {
-                        egui::RichText::new(label).strong().size(15.0)
-                    } else {
-                        egui::RichText::new(label).weak().size(15.0)
-                    };
-                    if ui.selectable_label(selected, text).clicked() {
-                        *view = v;
-                    }
-                    ui.add_space(4.0);
-                }
+                ui.add_space(10.0);
+                widgets::segmented(
+                    ui,
+                    view,
+                    &[(View::Library, "Library"), (View::Develop, "Develop")],
+                );
             });
         });
-        ui.add_space(8.0);
+
+        // Drag anywhere on the empty bar; double-click toggles maximize.
+        let drag = ui.interact(
+            bar_rect,
+            ui.id().with("titlebar-drag"),
+            egui::Sense::click_and_drag(),
+        );
+        if drag.double_clicked() {
+            let maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+        } else if drag.drag_started() {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
     });
     action
 }

@@ -6,6 +6,7 @@ use egui::{Color32, Rect, Sense, Vec2};
 use crate::catalog::ImageRecord;
 use crate::jobs::Jobs;
 use crate::ui::grid::GridState;
+use crate::ui::theme;
 
 const STRIP_CELL: f32 = 76.0;
 const PAD: f32 = 4.0;
@@ -49,7 +50,7 @@ pub fn show(
                     }
 
                     let painter = ui.painter();
-                    painter.rect_filled(rect, 3.0, Color32::from_gray(24));
+                    painter.rect_filled(rect, 3.0, theme::bg_raised());
                     if let Some(tex) = state.textures.get(&rec.id) {
                         let size = tex.size_vec2();
                         let scale =
@@ -71,8 +72,8 @@ pub fn show(
                         );
                     }
                     let dot = match rec.flag {
-                        crate::catalog::Flag::Pick => Some(Color32::from_rgb(140, 220, 140)),
-                        crate::catalog::Flag::Reject => Some(Color32::from_rgb(235, 100, 90)),
+                        crate::catalog::Flag::Pick => Some(theme::flag_pick()),
+                        crate::catalog::Flag::Reject => Some(theme::danger()),
                         crate::catalog::Flag::Unflagged => None,
                     };
                     if let Some(color) = dot {

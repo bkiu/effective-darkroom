@@ -8,6 +8,7 @@ use lru::LruCache;
 
 use crate::catalog::{Collection, Flag, ImageRecord};
 use crate::jobs::Jobs;
+use crate::ui::theme;
 
 const CELL: f32 = 160.0;
 const PAD: f32 = 8.0;
@@ -126,8 +127,8 @@ pub fn show(
 pub fn draw_flag_badge(painter: &egui::Painter, rect: Rect, flag: Flag) {
     let (glyph, color) = match flag {
         Flag::Unflagged => return,
-        Flag::Pick => ("⚑", Color32::from_rgb(140, 220, 140)),
-        Flag::Reject => ("✖", Color32::from_rgb(235, 100, 90)),
+        Flag::Pick => ("⚑", theme::flag_pick()),
+        Flag::Reject => ("✖", theme::danger()),
     };
     let badge = Rect::from_min_size(rect.min + Vec2::splat(5.0), Vec2::splat(18.0));
     painter.rect_filled(badge, 4.0, Color32::from_black_alpha(170));
@@ -169,7 +170,7 @@ fn cell(
     let bg = if selected {
         ui.visuals().selection.bg_fill.gamma_multiply(0.4)
     } else {
-        Color32::from_gray(28)
+        theme::bg_raised()
     };
     painter.rect_filled(rect, 4.0, bg);
 
@@ -211,7 +212,7 @@ fn cell(
         painter.rect_stroke(
             rect,
             4.0,
-            egui::Stroke::new(1.0, Color32::from_gray(90)),
+            egui::Stroke::new(1.0, theme::line_strong()),
             egui::StrokeKind::Inside,
         );
     }

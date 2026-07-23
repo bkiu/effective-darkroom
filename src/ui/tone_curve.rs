@@ -5,6 +5,7 @@ use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
 use crate::engine::curve::MonotoneCubic;
 use crate::engine::params::ToneCurves;
+use crate::ui::theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Channel {
@@ -18,7 +19,7 @@ pub enum Channel {
 impl Channel {
     fn color(self) -> Color32 {
         match self {
-            Channel::Composite => Color32::from_gray(230),
+            Channel::Composite => theme::text_primary(),
             Channel::Red => Color32::from_rgb(235, 90, 90),
             Channel::Green => Color32::from_rgb(90, 220, 90),
             Channel::Blue => Color32::from_rgb(110, 130, 250),
@@ -45,7 +46,7 @@ pub fn show(
     let mut changed = false;
 
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Tone Curve").strong());
+        ui.label(theme::overline_text("Tone Curve"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.small_button("Linear").clicked() {
                 *active_points_mut(curves, state.channel) = vec![[0.0, 0.0], [1.0, 1.0]];
@@ -78,12 +79,12 @@ pub fn show(
         ui.allocate_exact_size(Vec2::new(width, CURVE_SIZE), Sense::click_and_drag());
     let painter = ui.painter_at(rect.expand(2.0));
 
-    painter.rect_filled(rect, 4.0, Color32::from_gray(24));
+    painter.rect_filled(rect, 4.0, theme::bg_canvas());
     for i in 1..4 {
         let f = i as f32 / 4.0;
         let x = rect.left() + f * rect.width();
         let y = rect.top() + f * rect.height();
-        let grid = Stroke::new(1.0, Color32::from_gray(40));
+        let grid = Stroke::new(1.0, theme::line_subtle().gamma_multiply(0.6));
         painter.line_segment([Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())], grid);
         painter.line_segment([Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)], grid);
     }

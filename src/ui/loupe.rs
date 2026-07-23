@@ -118,11 +118,12 @@ pub fn show(
 }
 
 fn draw_info_overlay(ui: &egui::Ui, rect: Rect, lines: &[String]) {
+    use crate::ui::theme;
     let painter = ui.painter();
     let margin = 14.0;
     let pad = 10.0;
-    let title_font = egui::FontId::proportional(16.0);
-    let body_font = egui::FontId::proportional(13.0);
+    let title_font = egui::FontId::new(15.0, theme::semibold());
+    let body_font = egui::FontId::new(12.5, theme::mono());
     let line_gap = 4.0;
 
     // Measure.

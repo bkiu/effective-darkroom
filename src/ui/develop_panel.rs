@@ -1,9 +1,11 @@
 //! The develop side panel: Basic (white balance, tone, presence) and the
 //! Tone Curve. Layout follows Lightroom's develop module.
 
-use crate::engine::params::{EditParams, TEMP_MAX, TEMP_MIN};
+use crate::engine::params::{EditParams, TEMP_DEFAULT, TEMP_MAX, TEMP_MIN};
 use crate::ui::crop_overlay::AspectChoice;
+use crate::ui::theme;
 use crate::ui::tone_curve::{self, ToneCurveState};
+use crate::ui::widgets::Adjustment;
 
 pub struct PanelResponse {
     pub changed: bool,
@@ -44,7 +46,7 @@ pub fn show(
         .show(ui, |ui| {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.heading("Basic");
+                ui.label(theme::section_text("Basic"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Reset").clicked() {
                         reset = true;
@@ -67,7 +69,7 @@ pub fn show(
             });
             ui.separator();
 
-            ui.label(egui::RichText::new("Crop & Straighten").strong());
+            ui.label(theme::overline_text("Crop & Straighten"));
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 if ui
@@ -123,7 +125,7 @@ pub fn show(
 
             ui.add_space(12.0);
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("White Balance").strong());
+                ui.label(theme::overline_text("White Balance"));
                 if let Some((temp, tint)) = as_shot {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.small_button("As Shot").clicked() {
@@ -138,7 +140,7 @@ pub fn show(
             changed |= slider(ui, "Tint", &mut params.wb_tint, -150.0..=150.0, false);
 
             ui.add_space(12.0);
-            ui.label(egui::RichText::new("Tone").strong());
+            ui.label(theme::overline_text("Tone"));
             ui.add_space(4.0);
             changed |= slider(ui, "Exposure", &mut params.exposure, -5.0..=5.0, false);
             changed |= slider(ui, "Contrast", &mut params.contrast, -100.0..=100.0, false);
@@ -148,7 +150,7 @@ pub fn show(
             changed |= slider(ui, "Blacks", &mut params.blacks, -100.0..=100.0, false);
 
             ui.add_space(12.0);
-            ui.label(egui::RichText::new("Presence").strong());
+            ui.label(theme::overline_text("Presence"));
             ui.add_space(4.0);
             changed |= slider(ui, "Texture", &mut params.texture, -100.0..=100.0, false);
             changed |= slider(ui, "Clarity", &mut params.clarity, -100.0..=100.0, false);
@@ -158,7 +160,7 @@ pub fn show(
             changed |= slider(ui, "Saturation", &mut params.saturation, -100.0..=100.0, false);
 
             ui.add_space(12.0);
-            ui.label(egui::RichText::new("Detail").strong());
+            ui.label(theme::overline_text("Detail"));
             ui.add_space(4.0);
             changed |= slider(ui, "Color NR", &mut params.color_nr, 0.0..=100.0, false);
 
@@ -179,6 +181,7 @@ pub fn show(
     }
 }
 
+/// Bipolar +/- adjustment.
 fn slider(
     ui: &mut egui::Ui,
     label: &str,
@@ -186,14 +189,18 @@ fn slider(
     range: std::ops::RangeInclusive<f32>,
     logarithmic: bool,
 ) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.add_sized([70.0, 18.0], egui::Label::new(label));
-        let slider = egui::Slider::new(value, range)
-            .logarithmic(logarithmic)
-            .fixed_decimals(if logarithmic { 0 } else { 2 });
-        let r = ui.add_sized([ui.available_width(), 18.0], slider);
-        changed = r.changed();
-    });
-    changed
+    let (min, max) = (*range.start(), *range.end());
+    let bipolar = min < 0.0 && max > 0.0;
+    let default = if logarithmic { TEMP_DEFAULT } else { 0.0 };
+    Adjustment {
+        label,
+        value,
+        min,
+        max,
+        default,
+        bipolar,
+        decimals: if logarithmic { 0 } else { 2 },
+        logarithmic,
+    }
+    .show(ui)
 }

@@ -76,7 +76,20 @@ impl AppConfig {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        if let Ok(json) = serde_json::to_string_pretty(self) {
+        // Merge over the existing file so fields written by a newer build
+        // are preserved when an older binary saves (and vice versa).
+        let mut merged = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let (Some(obj), Ok(serde_json::Value::Object(new))) =
+            (merged.as_object_mut(), serde_json::to_value(self))
+        {
+            for (k, v) in new {
+                obj.insert(k, v);
+            }
+        }
+        if let Ok(json) = serde_json::to_string_pretty(&merged) {
             let _ = std::fs::write(path, json);
         }
     }
@@ -168,25 +181,7 @@ pub struct App {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
-        cc.egui_ctx.all_styles_mut(|style| {
-            style.spacing.button_padding = egui::vec2(10.0, 5.0);
-            style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-            style.spacing.menu_margin = egui::Margin::same(8);
-        });
-
-        // Inter as the primary UI font, with egui's emoji fonts as fallback.
-        let mut fonts = egui::FontDefinitions::default();
-        fonts.font_data.insert(
-            "Inter".into(),
-            egui::FontData::from_static(include_bytes!("../assets/fonts/Inter.ttf")).into(),
-        );
-        fonts
-            .families
-            .entry(egui::FontFamily::Proportional)
-            .or_default()
-            .insert(0, "Inter".into());
-        cc.egui_ctx.set_fonts(fonts);
+        crate::ui::theme::apply(&cc.egui_ctx);
 
         let early_config = AppConfig::load();
         let zoom = early_config.ui_zoom.unwrap_or(DEFAULT_UI_ZOOM);
@@ -859,7 +854,7 @@ impl App {
 
     fn collections_panel_contents(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Collections").strong());
+                    ui.label(crate::ui::theme::overline_text("Collections"));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.small_button("+").on_hover_text("New collection").clicked()
                             && self.new_collection_name.is_none()

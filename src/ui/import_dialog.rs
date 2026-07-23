@@ -221,7 +221,7 @@ impl ImportDialog {
         ui.add_space(8.0);
         ui.separator();
         ui.add_space(8.0);
-        ui.heading("Destination");
+        ui.label(crate::ui::theme::overline_text("Destination"));
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             if ui.button("Choose…").clicked() {
@@ -275,10 +275,13 @@ impl ImportDialog {
             _ => None,
         };
         let ready = scan_source.is_some() && self.dest_root.is_some();
-        if ui
-            .add_enabled(ready, egui::Button::new("Next: choose photos…"))
-            .clicked()
-        {
+        let next_clicked = if ready {
+            crate::ui::theme::primary_button(ui, "Next: choose photos…").clicked()
+        } else {
+            ui.add_enabled(false, egui::Button::new("Next: choose photos…"))
+                .clicked()
+        };
+        if next_clicked {
             self.last_outcome = None;
             self.reset_picker();
             self.scan_generation += 1;
@@ -524,7 +527,7 @@ impl ImportDialog {
     }
 
     fn files_section(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Sources");
+        ui.label(crate::ui::theme::overline_text("Sources"));
         ui.horizontal(|ui| {
             if ui.button("Add files…").clicked() {
                 if let Some(files) = rfd::FileDialog::new()
@@ -571,7 +574,7 @@ impl ImportDialog {
 
     fn camera_section(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.heading("Camera");
+            ui.label(crate::ui::theme::overline_text("Camera"));
             if ui.button("Refresh").clicked() {
                 self.refresh_cameras();
             }

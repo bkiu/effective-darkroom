@@ -57,13 +57,7 @@ impl DeleteDialog {
                     if ui.button("Remove from library").clicked() {
                         action = DeleteAction::RemoveFromLibrary;
                     }
-                    if ui
-                        .button(
-                            egui::RichText::new("Move to trash")
-                                .color(egui::Color32::from_rgb(240, 120, 110)),
-                        )
-                        .clicked()
-                    {
+                    if crate::ui::theme::danger_button(ui, "Move to trash").clicked() {
                         action = DeleteAction::DeleteFromDisk;
                     }
                     if ui.button("Cancel").clicked() {

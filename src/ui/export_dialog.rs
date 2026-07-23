@@ -124,7 +124,7 @@ impl ExportDialog {
                 ui.separator();
                 ui.add_space(8.0);
 
-                ui.label(egui::RichText::new("Export Location").strong());
+                ui.label(crate::ui::theme::overline_text("Export Location"));
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.label("Export to");
@@ -173,7 +173,7 @@ impl ExportDialog {
                 }
 
                 ui.add_space(12.0);
-                ui.label(egui::RichText::new("File Settings").strong());
+                ui.label(crate::ui::theme::overline_text("File Settings"));
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.label("Format");
@@ -190,7 +190,7 @@ impl ExportDialog {
                         });
 
                         ui.add_space(12.0);
-                        ui.label(egui::RichText::new("Image Sizing").strong());
+                        ui.label(crate::ui::theme::overline_text("Image Sizing"));
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.checkbox(&mut self.prefs.resize_enabled, "Resize long edge to");
@@ -225,7 +225,7 @@ impl ExportDialog {
                 }
 
                 ui.add_space(12.0);
-                ui.label(egui::RichText::new("File Naming").strong());
+                ui.label(crate::ui::theme::overline_text("File Naming"));
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.label("Prefix");
@@ -253,7 +253,12 @@ impl ExportDialog {
 
                 let dest = self.prefs.dest();
                 let ready = dest.is_some() && selected > 0;
-                if ui.add_enabled(ready, egui::Button::new("Export")).clicked() {
+                let export_clicked = if ready {
+                    crate::ui::theme::primary_button(ui, "Export").clicked()
+                } else {
+                    ui.add_enabled(false, egui::Button::new("Export")).clicked()
+                };
+                if export_clicked {
                     self.last_outcome = None;
                     start = Some(ExportSpec {
                         image_ids: Vec::new(), // filled by the caller
