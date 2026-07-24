@@ -26,6 +26,12 @@ pub struct GridState {
     /// library sorts oldest-first). Set at startup, consumed on the first
     /// frame that actually shows photos.
     pub scroll_to_bottom: bool,
+    /// One-shot: restore this scroll offset (collection switches remember
+    /// where each view was).
+    pub restore_scroll: Option<f32>,
+    /// Scroll offset as of the last drawn frame, for the app to stash away
+    /// before switching views.
+    pub scroll_offset: f32,
 }
 
 impl Default for GridState {
@@ -38,6 +44,8 @@ impl Default for GridState {
             anchor: None,
             activated: None,
             scroll_to_bottom: true,
+            restore_scroll: None,
+            scroll_offset: 0.0,
         }
     }
 }
@@ -113,6 +121,9 @@ pub fn show(
     if std::mem::take(&mut state.scroll_to_bottom) {
         // Past-the-end offset; egui clamps it to the real maximum.
         scroll = scroll.vertical_scroll_offset(rows as f32 * row_height);
+        state.restore_scroll = None;
+    } else if let Some(offset) = state.restore_scroll.take() {
+        scroll = scroll.vertical_scroll_offset(offset);
     }
     let out = scroll.show_rows(ui, row_height, rows, |ui, row_range| {
         for row in row_range {
@@ -128,6 +139,7 @@ pub fn show(
             });
         }
     });
+    state.scroll_offset = out.state.offset.y;
     scrollbar_timeline(ui, &out.inner_rect, images, rows, cols);
     response
 }

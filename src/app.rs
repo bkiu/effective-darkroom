@@ -143,6 +143,9 @@ pub struct App {
     visible: Vec<ImageRecord>,
     visible_dirty: bool,
     collections: Vec<Collection>,
+    /// Remembered grid scroll offset per view (None = All Photos), so
+    /// switching collections returns to where each one was.
+    scroll_positions: std::collections::HashMap<Option<i64>, f32>,
     /// None = All Photos.
     active_collection: Option<i64>,
     collection_members: std::collections::HashSet<i64>,
@@ -258,6 +261,7 @@ impl App {
             visible: Vec::new(),
             visible_dirty: true,
             collections,
+            scroll_positions: Default::default(),
             active_collection: None,
             collection_members: Default::default(),
             filters: Default::default(),
@@ -332,11 +336,24 @@ impl App {
         self.grid.selection.retain(|id| visible_ids.contains(id));
     }
 
+    /// Change the viewed collection, remembering each view's scroll spot.
+    fn switch_collection(&mut self, new: Option<i64>) {
+        if self.active_collection == new {
+            return;
+        }
+        self.scroll_positions
+            .insert(self.active_collection, self.grid.scroll_offset);
+        self.grid.restore_scroll =
+            Some(self.scroll_positions.get(&new).copied().unwrap_or(0.0));
+        self.active_collection = new;
+        self.visible_dirty = true;
+    }
+
     fn reload_collections(&mut self) {
         self.collections = self.catalog.list_collections().unwrap_or_default();
         if let Some(cid) = self.active_collection {
             if !self.collections.iter().any(|c| c.id == cid) {
-                self.active_collection = None;
+                self.switch_collection(None);
             }
         }
         self.visible_dirty = true;
@@ -915,10 +932,10 @@ impl App {
                 )
                 .clicked()
                 {
-                    self.active_collection = None;
-                    self.visible_dirty = true;
+                    self.switch_collection(None);
                 }
 
+                let mut activate_collection = None;
                 let mut delete_collection = None;
                 let mut start_rename: Option<(i64, String)> = None;
                 let mut rename_to: Option<(i64, String)> = None;
@@ -975,8 +992,7 @@ impl App {
                         selected,
                     );
                     if resp.clicked() {
-                        self.active_collection = Some(col.id);
-                        self.visible_dirty = true;
+                        activate_collection = Some(col.id);
                     }
                     resp.context_menu(|ui| {
                         if ui.button("Rename collection").clicked() {
@@ -988,6 +1004,9 @@ impl App {
                             ui.close();
                         }
                     });
+                }
+                if let Some(cid) = activate_collection {
+                    self.switch_collection(Some(cid));
                 }
                 if let Some((cid, name)) = rename_to {
                     if let Err(e) = self.catalog.rename_collection(cid, &name) {
