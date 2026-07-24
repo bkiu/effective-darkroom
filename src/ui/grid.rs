@@ -128,21 +128,95 @@ pub fn show(
             });
         }
     });
-    scrollbar_date(ui, &out.inner_rect, images, rows, cols);
+    scrollbar_timeline(ui, &out.inner_rect, images, rows, cols);
     response
 }
 
-/// Google Photos-style scrubber hint: while the pointer is over the grid's
-/// scrollbar, map its position on the track to a spot in the library and
-/// float a month/year pill next to it.
-fn scrollbar_date(
+/// Google Photos-style timeline on the grid's scrollbar: year labels pinned
+/// where each year starts in the library, month-start dots between them, and
+/// a floating month/year pill while the pointer scrubs the track.
+fn scrollbar_timeline(
     ui: &egui::Ui,
     inner_rect: &Rect,
     images: &[ImageRecord],
     rows: usize,
     cols: usize,
 ) {
-    use chrono::TimeZone;
+    use chrono::{Datelike, TimeZone};
+
+    // Everything fits on screen → there is no track to annotate.
+    if rows as f32 * (CELL + PAD) <= inner_rect.height() {
+        return;
+    }
+
+    let painter = ui.ctx().layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("grid-scrollbar-date"),
+    ));
+
+    // First index of each year / month as a fraction through the library
+    // (capture order, so fractions are monotonic).
+    let n = images.len();
+    let mut years: Vec<(i32, f32)> = Vec::new();
+    let mut month_fracs: Vec<f32> = Vec::new();
+    let mut last: Option<(i32, u32)> = None;
+    for (i, rec) in images.iter().enumerate() {
+        let Some(dt) = rec
+            .capture_ts
+            .and_then(|ts| chrono::Local.timestamp_opt(ts, 0).earliest())
+        else {
+            continue;
+        };
+        let ym = (dt.year(), dt.month());
+        let frac = i as f32 / (n - 1).max(1) as f32;
+        if last.is_none_or(|(y, _)| y != ym.0) {
+            years.push((ym.0, frac));
+        } else if last != Some(ym) {
+            month_fracs.push(frac);
+        }
+        last = Some(ym);
+    }
+
+    let track_x = inner_rect.right() - 6.0;
+    let font = egui::FontId::new(10.5, theme::mono());
+    // Year labels, dropping any that would crowd the previous one.
+    let mut label_bands: Vec<(f32, f32)> = Vec::new();
+    for (year, frac) in &years {
+        let galley =
+            painter.layout_no_wrap(year.to_string(), font.clone(), theme::text_secondary());
+        let size = galley.size();
+        let y = (inner_rect.top() + frac * inner_rect.height()).clamp(
+            inner_rect.top() + size.y / 2.0,
+            inner_rect.bottom() - size.y / 2.0,
+        );
+        let text_rect =
+            Rect::from_min_size(egui::pos2(track_x - 6.0 - size.x, y - size.y / 2.0), size);
+        let bg = text_rect.expand2(Vec2::new(5.0, 2.0));
+        if label_bands
+            .last()
+            .is_some_and(|(_, bottom)| bg.top() < bottom + 6.0)
+        {
+            continue;
+        }
+        painter.rect_filled(
+            bg,
+            egui::CornerRadius::same(theme::RADIUS_SM),
+            Color32::from_black_alpha(140),
+        );
+        painter.galley(text_rect.min, galley, theme::text_secondary());
+        label_bands.push((bg.top(), bg.bottom()));
+    }
+    // Month dots, skipping the bands the year labels occupy.
+    for frac in &month_fracs {
+        let y = inner_rect.top() + frac * inner_rect.height();
+        if label_bands
+            .iter()
+            .any(|(top, bottom)| y >= top - 3.0 && y <= bottom + 3.0)
+        {
+            continue;
+        }
+        painter.circle_filled(egui::pos2(track_x, y), 1.5, theme::text_muted());
+    }
 
     let Some(pos) = ui.ctx().pointer_latest_pos() else {
         return;
@@ -171,10 +245,6 @@ fn scrollbar_date(
         return;
     };
 
-    let painter = ui.ctx().layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
-        egui::Id::new("grid-scrollbar-date"),
-    ));
     let galley = painter.layout_no_wrap(label, theme::body_font(), theme::text_primary());
     let pad = Vec2::new(10.0, 6.0);
     let size = galley.size() + pad * 2.0;
