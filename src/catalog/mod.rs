@@ -180,6 +180,14 @@ impl Catalog {
         Ok(self.conn.last_insert_rowid())
     }
 
+    pub fn rename_collection(&self, id: i64, name: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE collections SET name = ?1 WHERE id = ?2",
+            params![name.trim(), id],
+        )?;
+        Ok(())
+    }
+
     pub fn delete_collection(&self, id: i64) -> Result<()> {
         self.conn
             .execute("DELETE FROM collections WHERE id = ?1", params![id])?;
@@ -391,6 +399,9 @@ mod tests {
 
         cat.remove_from_collection(cid, &[a]).unwrap();
         assert_eq!(cat.collection_image_ids(cid).unwrap().len(), 1);
+
+        cat.rename_collection(cid, "  Road Trip ").unwrap();
+        assert_eq!(cat.list_collections().unwrap()[0].name, "Road Trip");
 
         // Deleting an image cascades out of collections.
         cat.delete_images(&[b]).unwrap();

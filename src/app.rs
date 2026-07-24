@@ -50,6 +50,10 @@ pub struct AppConfig {
     /// Custom catalog directory (Settings -> Move catalog). Also read
     /// directly by catalog::data_dir() for background workers.
     pub catalog_dir: Option<PathBuf>,
+    /// Immich server URL for the export integration.
+    pub immich_url: Option<String>,
+    /// Immich API key (stored in plain text).
+    pub immich_api_key: Option<String>,
     /// Legacy field, migrated into `library_root`.
     pub last_import_dest: Option<PathBuf>,
 }
@@ -148,6 +152,9 @@ pub struct App {
     /// In-progress "new collection" name entry in the side panel.
     new_collection_name: Option<String>,
     new_collection_focus_pending: bool,
+    /// In-progress collection rename: (collection id, edit buffer).
+    rename_collection: Option<(i64, String)>,
+    rename_collection_focus_pending: bool,
     jobs: Jobs,
     engine: Option<RenderEngine>,
     view: View,
@@ -257,6 +264,8 @@ impl App {
             edited_ids: Default::default(),
             new_collection_name: None,
             new_collection_focus_pending: false,
+            rename_collection: None,
+            rename_collection_focus_pending: false,
             jobs: Jobs::new(cc.egui_ctx.clone()),
             engine,
             view,
@@ -614,6 +623,14 @@ impl App {
                         self.export.last_outcome = Some(outcome);
                     }
                 }
+                JobResult::ImmichAlbums { result } => {
+                    self.export.albums_loading = false;
+                    self.export.albums = Some(result);
+                }
+                JobResult::ImmichTest { result } => {
+                    self.settings.immich_testing = false;
+                    self.settings.immich_test = Some(result);
+                }
             }
         }
     }
@@ -903,7 +920,53 @@ impl App {
                 }
 
                 let mut delete_collection = None;
+                let mut start_rename: Option<(i64, String)> = None;
+                let mut rename_to: Option<(i64, String)> = None;
                 for col in &self.collections {
+                    // A row being renamed shows an edit field instead.
+                    if self
+                        .rename_collection
+                        .as_ref()
+                        .is_some_and(|(id, _)| *id == col.id)
+                    {
+                        let (_, name) = self.rename_collection.as_mut().unwrap();
+                        ui.add_space(4.0);
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(name).hint_text("collection name"),
+                        );
+                        if self.rename_collection_focus_pending {
+                            resp.request_focus();
+                            self.rename_collection_focus_pending = false;
+                        }
+                        let enter = resp.lost_focus()
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        let trimmed = name.trim().to_string();
+                        let mut confirmed = enter;
+                        let mut cancelled =
+                            ui.input(|i| i.key_pressed(egui::Key::Escape));
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(
+                                    !trimmed.is_empty(),
+                                    egui::Button::new("Rename"),
+                                )
+                                .clicked()
+                            {
+                                confirmed = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                cancelled = true;
+                            }
+                        });
+                        if confirmed && !trimmed.is_empty() {
+                            rename_to = Some((col.id, trimmed));
+                            self.rename_collection = None;
+                        } else if cancelled {
+                            self.rename_collection = None;
+                        }
+                        continue;
+                    }
+
                     let selected = self.active_collection == Some(col.id);
                     let resp = crate::ui::widgets::collection_row(
                         ui,
@@ -916,11 +979,26 @@ impl App {
                         self.visible_dirty = true;
                     }
                     resp.context_menu(|ui| {
+                        if ui.button("Rename collection").clicked() {
+                            start_rename = Some((col.id, col.name.clone()));
+                            ui.close();
+                        }
                         if ui.button("Delete collection").clicked() {
                             delete_collection = Some(col.id);
                             ui.close();
                         }
                     });
+                }
+                if let Some((cid, name)) = rename_to {
+                    if let Err(e) = self.catalog.rename_collection(cid, &name) {
+                        // Most likely a duplicate name (unique constraint).
+                        tracing::error!("rename collection: {e:#}");
+                    }
+                    self.reload_collections();
+                }
+                if let Some(pending) = start_rename {
+                    self.rename_collection = Some(pending);
+                    self.rename_collection_focus_pending = true;
                 }
                 if let Some(cid) = delete_collection {
                     if let Err(e) = self.catalog.delete_collection(cid) {
@@ -1221,6 +1299,11 @@ impl eframe::App for App {
         if action.open_settings {
             self.settings.open = true;
             self.settings.catalog_message = None;
+            self.settings.immich_url =
+                self.config.immich_url.clone().unwrap_or_default();
+            self.settings.immich_api_key =
+                self.config.immich_api_key.clone().unwrap_or_default();
+            self.settings.immich_test = None;
         }
         if self.view == View::Develop {
             self.ensure_current_from_selection();
@@ -1259,6 +1342,7 @@ impl eframe::App for App {
         {
             use crate::ui::settings_dialog::SettingsAction;
             let catalog_dir = crate::catalog::data_dir();
+            let settings_was_open = self.settings.open;
             match self
                 .settings
                 .show(&ctx, self.config.library_root.as_ref(), &catalog_dir)
@@ -1293,10 +1377,28 @@ impl eframe::App for App {
                 SettingsAction::MoveCatalog(new_dir) => {
                     self.move_catalog(new_dir);
                 }
+                SettingsAction::TestImmich { url, api_key } => {
+                    self.jobs.start_immich_test(url, api_key, ctx.clone());
+                }
+            }
+            // Keep the Immich connection in sync with the dialog's edit
+            // buffers; persist when the dialog closes (and on app exit).
+            if settings_was_open {
+                let url = self.settings.immich_url.trim();
+                let key = self.settings.immich_api_key.trim();
+                self.config.immich_url = (!url.is_empty()).then(|| url.to_string());
+                self.config.immich_api_key = (!key.is_empty()).then(|| key.to_string());
+                if !self.settings.open {
+                    self.config.save();
+                }
             }
         }
 
-        if let Some(mut spec) = self.export.show(&ctx, self.grid.selection.len()) {
+        let immich_configured = self.config.immich_url.is_some()
+            && self.config.immich_api_key.is_some();
+        if let Some(request) =
+            self.export.show(&ctx, self.grid.selection.len(), immich_configured)
+        {
             // Remember the export settings for next time.
             if self.config.export.as_ref() != Some(&self.export.prefs) {
                 self.config.export = Some(self.export.prefs.clone());
@@ -1305,7 +1407,7 @@ impl eframe::App for App {
             // Export in library order; make sure pending edits are saved so
             // the export renders what the user sees.
             self.flush_edits();
-            spec.image_ids = self
+            let image_ids: Vec<i64> = self
                 .images
                 .iter()
                 .filter(|r| self.grid.selection.contains(&r.id))
@@ -1314,9 +1416,34 @@ impl eframe::App for App {
             if let Some(engine) = &self.engine {
                 let (device, queue) = engine.device_queue();
                 self.export.progress =
-                    Some((0, spec.image_ids.len(), String::from("starting…")));
-                self.jobs.start_export(spec, device, queue, ctx.clone());
+                    Some((0, image_ids.len(), String::from("starting…")));
+                use crate::ui::export_dialog::ExportRequest;
+                match request {
+                    ExportRequest::Disk(mut spec) => {
+                        spec.image_ids = image_ids;
+                        self.jobs.start_export(spec, device, queue, ctx.clone());
+                    }
+                    ExportRequest::Immich(mut spec) => {
+                        spec.image_ids = image_ids;
+                        spec.url = self.config.immich_url.clone().unwrap_or_default();
+                        spec.api_key =
+                            self.config.immich_api_key.clone().unwrap_or_default();
+                        self.jobs.start_immich_export(spec, device, queue, ctx.clone());
+                    }
+                }
             }
+        }
+        // The Immich tab wants the album list (first show or manual refresh).
+        if std::mem::take(&mut self.export.fetch_albums)
+            && immich_configured
+            && !self.export.albums_loading
+        {
+            self.export.albums_loading = true;
+            self.jobs.start_immich_albums(
+                self.config.immich_url.clone().unwrap_or_default(),
+                self.config.immich_api_key.clone().unwrap_or_default(),
+                ctx.clone(),
+            );
         }
 
         // Grid double-click opens the loupe.

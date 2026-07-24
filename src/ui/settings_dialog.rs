@@ -1,5 +1,5 @@
-//! Settings: library default location, catalog location, and the move
-//! operations for both.
+//! Settings: library default location, catalog location, the move
+//! operations for both, and the Immich server connection.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,6 +17,13 @@ pub struct SettingsDialog {
     pub move_progress: Option<(usize, usize, String)>,
     pub last_outcome: Option<MoveOutcome>,
     pub catalog_message: Option<String>,
+    /// Edit buffers for the Immich connection; the app syncs these with the
+    /// config while the dialog is open.
+    pub immich_url: String,
+    pub immich_api_key: String,
+    /// Result of the last "Test connection": account name or error.
+    pub immich_test: Option<Result<String, String>>,
+    pub immich_testing: bool,
 }
 
 /// What the settings dialog wants the app to do this frame.
@@ -28,6 +35,8 @@ pub enum SettingsAction {
     StartLibraryMove(PathBuf),
     /// Move catalog.db + thumbs to this directory.
     MoveCatalog(PathBuf),
+    /// Validate the Immich URL + API key in the background.
+    TestImmich { url: String, api_key: String },
 }
 
 impl SettingsDialog {
@@ -180,6 +189,65 @@ impl SettingsDialog {
                 }
                 if let Some(msg) = &self.catalog_message {
                     ui.label(egui::RichText::new(msg).weak());
+                }
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(6.0);
+                ui.label(crate::ui::theme::overline_text("Immich"));
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label("Server URL");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.immich_url)
+                            .hint_text("https://immich.example.com")
+                            .desired_width(280.0),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label("API key");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.immich_api_key)
+                            .password(true)
+                            .hint_text("paste an API key")
+                            .desired_width(280.0),
+                    );
+                });
+                ui.label(
+                    egui::RichText::new(
+                        "Create a key in Immich under Account Settings > API Keys. \
+                         Used by the Immich tab of the export dialog; stored in \
+                         plain text in config.json.",
+                    )
+                    .weak()
+                    .small(),
+                );
+                ui.add_space(4.0);
+                let can_test = !self.immich_url.trim().is_empty()
+                    && !self.immich_api_key.trim().is_empty()
+                    && !self.immich_testing;
+                if ui
+                    .add_enabled(can_test, egui::Button::new("Test connection"))
+                    .clicked()
+                {
+                    self.immich_test = None;
+                    self.immich_testing = true;
+                    action = SettingsAction::TestImmich {
+                        url: self.immich_url.trim().to_string(),
+                        api_key: self.immich_api_key.trim().to_string(),
+                    };
+                }
+                if self.immich_testing {
+                    ui.label(egui::RichText::new("Testing…").weak());
+                }
+                match &self.immich_test {
+                    Some(Ok(who)) => {
+                        ui.label(format!("✔ Connected as {who}"));
+                    }
+                    Some(Err(e)) => {
+                        ui.colored_label(egui::Color32::LIGHT_RED, e);
+                    }
+                    None => {}
                 }
                 ui.add_space(4.0);
             });

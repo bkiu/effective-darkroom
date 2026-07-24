@@ -22,6 +22,10 @@ pub struct GridState {
     pub anchor: Option<usize>,
     /// Image the user wants opened in loupe/develop.
     pub activated: Option<i64>,
+    /// One-shot: jump to the end of the grid (the newest photos, since the
+    /// library sorts oldest-first). Set at startup, consumed on the first
+    /// frame that actually shows photos.
+    pub scroll_to_bottom: bool,
 }
 
 impl Default for GridState {
@@ -33,6 +37,7 @@ impl Default for GridState {
             selection: HashSet::new(),
             anchor: None,
             activated: None,
+            scroll_to_bottom: true,
         }
     }
 }
@@ -104,22 +109,25 @@ pub fn show(
     let rows = images.len().div_ceil(cols);
     let row_height = CELL + PAD;
 
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show_rows(ui, row_height, rows, |ui, row_range| {
-            for row in row_range {
-                ui.horizontal(|ui| {
-                    ui.add_space(PAD / 2.0);
-                    for col in 0..cols {
-                        let idx = row * cols + col;
-                        if idx >= images.len() {
-                            break;
-                        }
-                        cell(ui, state, images, idx, jobs, gctx, &mut response);
+    let mut scroll = egui::ScrollArea::vertical().auto_shrink([false, false]);
+    if std::mem::take(&mut state.scroll_to_bottom) {
+        // Past-the-end offset; egui clamps it to the real maximum.
+        scroll = scroll.vertical_scroll_offset(rows as f32 * row_height);
+    }
+    scroll.show_rows(ui, row_height, rows, |ui, row_range| {
+        for row in row_range {
+            ui.horizontal(|ui| {
+                ui.add_space(PAD / 2.0);
+                for col in 0..cols {
+                    let idx = row * cols + col;
+                    if idx >= images.len() {
+                        break;
                     }
-                });
-            }
-        });
+                    cell(ui, state, images, idx, jobs, gctx, &mut response);
+                }
+            });
+        }
+    });
     response
 }
 

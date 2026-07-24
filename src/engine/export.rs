@@ -53,8 +53,8 @@ pub struct ExportOutcome {
 }
 
 /// Output filename (without collision handling) for an image record.
-pub fn export_file_name(spec: &ExportSpec, rec: &ImageRecord) -> String {
-    let stem = match spec.naming {
+pub fn export_file_name(prefix: &str, naming: Naming, ext: &str, rec: &ImageRecord) -> String {
+    let stem = match naming {
         Naming::Original => Path::new(&rec.file_name)
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
@@ -70,11 +70,17 @@ pub fn export_file_name(spec: &ExportSpec, rec: &ImageRecord) -> String {
                     .unwrap_or_else(|| rec.file_name.clone())
             }),
     };
-    let ext = match spec.format {
-        ExportFormat::Jpeg => "jpg",
-        ExportFormat::Dng => "dng",
-    };
-    format!("{}{}.{}", spec.prefix, stem, ext)
+    format!("{prefix}{stem}.{ext}")
+}
+
+impl ExportSpec {
+    fn file_name(&self, rec: &ImageRecord) -> String {
+        let ext = match self.format {
+            ExportFormat::Jpeg => "jpg",
+            ExportFormat::Dng => "dng",
+        };
+        export_file_name(&self.prefix, self.naming, ext, rec)
+    }
 }
 
 fn unique_path(dir: &Path, name: &str) -> PathBuf {
@@ -141,7 +147,7 @@ fn export_one(
         _ => rendered,
     };
 
-    let out_path = unique_path(&spec.dest, &export_file_name(spec, rec));
+    let out_path = unique_path(&spec.dest, &spec.file_name(rec));
     let file = std::fs::File::create(&out_path).context("create output file")?;
     let mut writer = std::io::BufWriter::new(file);
     let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
@@ -157,7 +163,7 @@ fn export_one(
 
 /// Render an image at full resolution through the develop pipeline with its
 /// saved edits (the same path the preview uses).
-fn render_full(
+pub(crate) fn render_full(
     engine: &mut RenderEngine,
     catalog: &Catalog,
     rec: &ImageRecord,
@@ -211,7 +217,7 @@ fn export_one_dng(spec: &ExportSpec, rec: &ImageRecord) -> Result<()> {
         rec.kind == FileKind::Raw,
         "DNG export needs a RAW source (this is a JPEG)"
     );
-    let out_path = unique_path(&spec.dest, &export_file_name(spec, rec));
+    let out_path = unique_path(&spec.dest, &spec.file_name(rec));
     let file = std::fs::File::create(&out_path).context("create output file")?;
     let mut writer = std::io::BufWriter::new(file);
     let params = rawler::dng::convert::ConvertParams {
@@ -268,7 +274,7 @@ fn export_one_dng_baked(
         data.push(lut[px[2] as usize]);
     }
 
-    let out_path = unique_path(&spec.dest, &export_file_name(spec, rec));
+    let out_path = unique_path(&spec.dest, &spec.file_name(rec));
     let file = std::fs::File::create(&out_path).context("create output file")?;
     let mut writer = std::io::BufWriter::new(file);
     let mut dng = DngWriter::new(&mut writer, DNG_VERSION_V1_4)
@@ -323,7 +329,7 @@ fn export_one_dng_baked(
     Ok(())
 }
 
-fn resize_long_edge(img: &image::RgbaImage, edge: u32) -> Result<image::RgbaImage> {
+pub(crate) fn resize_long_edge(img: &image::RgbaImage, edge: u32) -> Result<image::RgbaImage> {
     use fast_image_resize as fir;
     let (w, h) = (img.width(), img.height());
     let scale = edge as f32 / w.max(h) as f32;
@@ -371,29 +377,21 @@ mod tests {
 
     #[test]
     fn naming_schemes() {
-        let mut spec = ExportSpec {
-            image_ids: vec![],
-            dest: PathBuf::new(),
-            format: ExportFormat::Jpeg,
-            dng_bake: false,
-            quality: 85,
-            long_edge: None,
-            prefix: String::new(),
-            naming: Naming::Original,
-        };
-        assert_eq!(export_file_name(&spec, &rec("IMG_4186.CR3", None)), "IMG_4186.jpg");
-        spec.prefix = "trip-".into();
         assert_eq!(
-            export_file_name(&spec, &rec("IMG_4186.CR3", None)),
+            export_file_name("", Naming::Original, "jpg", &rec("IMG_4186.CR3", None)),
+            "IMG_4186.jpg"
+        );
+        assert_eq!(
+            export_file_name("trip-", Naming::Original, "jpg", &rec("IMG_4186.CR3", None)),
             "trip-IMG_4186.jpg"
         );
-        spec.naming = Naming::DateTime;
-        let name = export_file_name(&spec, &rec("IMG_4186.CR3", Some(1_775_364_006)));
+        let name =
+            export_file_name("trip-", Naming::DateTime, "jpg", &rec("IMG_4186.CR3", Some(1_775_364_006)));
         assert!(name.starts_with("trip-2026"), "{name}");
         assert!(name.ends_with(".jpg"));
         // Missing capture date falls back to the stem.
         assert_eq!(
-            export_file_name(&spec, &rec("IMG_4186.CR3", None)),
+            export_file_name("trip-", Naming::DateTime, "jpg", &rec("IMG_4186.CR3", None)),
             "trip-IMG_4186.jpg"
         );
     }

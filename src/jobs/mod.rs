@@ -64,6 +64,14 @@ pub enum JobResult {
         file_name: String,
     },
     ExportDone(crate::engine::export::ExportOutcome),
+    /// Album list fetched for the Immich export tab.
+    ImmichAlbums {
+        result: Result<Vec<crate::immich::Album>, String>,
+    },
+    /// Settings "Test connection" result: the account name on success.
+    ImmichTest {
+        result: Result<String, String>,
+    },
     AutoStraighten {
         image_id: i64,
         /// Suggested crop angle, or None when no confident line direction.
@@ -219,6 +227,77 @@ impl Jobs {
                 ctx.request_repaint();
             })
             .expect("spawn export thread");
+    }
+
+    /// Spawn a one-shot Immich upload job, same shape as `start_export`.
+    pub fn start_immich_export(
+        &self,
+        spec: crate::immich::ImmichExportSpec,
+        device: eframe::wgpu::Device,
+        queue: eframe::wgpu::Queue,
+        ctx: egui::Context,
+    ) {
+        let tx = self.results_tx.clone();
+        std::thread::Builder::new()
+            .name("immich-export".into())
+            .spawn(move || {
+                let mut engine = crate::engine::RenderEngine::new_headless(device, queue);
+                let result = crate::catalog::Catalog::open_default()
+                    .and_then(|catalog| {
+                        crate::immich::run_blocking(
+                            &mut engine,
+                            &catalog,
+                            &spec,
+                            |cur, total, name| {
+                                let _ = tx.send(JobResult::ExportProgress {
+                                    current: cur,
+                                    total,
+                                    file_name: name.to_string(),
+                                });
+                                ctx.request_repaint();
+                            },
+                        )
+                    });
+                let outcome = result.unwrap_or_else(|e| {
+                    crate::engine::export::ExportOutcome {
+                        exported: 0,
+                        errors: vec![format!("Immich export failed: {e:#}")],
+                    }
+                });
+                let _ = tx.send(JobResult::ExportDone(outcome));
+                ctx.request_repaint();
+            })
+            .expect("spawn immich export thread");
+    }
+
+    /// Fetch the Immich album list for the export dialog.
+    pub fn start_immich_albums(&self, url: String, api_key: String, ctx: egui::Context) {
+        let tx = self.results_tx.clone();
+        std::thread::Builder::new()
+            .name("immich-albums".into())
+            .spawn(move || {
+                let result = crate::immich::Client::new(&url, &api_key)
+                    .albums()
+                    .map_err(|e| format!("{e:#}"));
+                let _ = tx.send(JobResult::ImmichAlbums { result });
+                ctx.request_repaint();
+            })
+            .expect("spawn immich albums thread");
+    }
+
+    /// Validate an Immich URL + API key from the settings dialog.
+    pub fn start_immich_test(&self, url: String, api_key: String, ctx: egui::Context) {
+        let tx = self.results_tx.clone();
+        std::thread::Builder::new()
+            .name("immich-test".into())
+            .spawn(move || {
+                let result = crate::immich::Client::new(&url, &api_key)
+                    .me()
+                    .map_err(|e| format!("{e:#}"));
+                let _ = tx.send(JobResult::ImmichTest { result });
+                ctx.request_repaint();
+            })
+            .expect("spawn immich test thread");
     }
 }
 
