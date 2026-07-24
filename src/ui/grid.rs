@@ -114,7 +114,7 @@ pub fn show(
         // Past-the-end offset; egui clamps it to the real maximum.
         scroll = scroll.vertical_scroll_offset(rows as f32 * row_height);
     }
-    scroll.show_rows(ui, row_height, rows, |ui, row_range| {
+    let out = scroll.show_rows(ui, row_height, rows, |ui, row_range| {
         for row in row_range {
             ui.horizontal(|ui| {
                 ui.add_space(PAD / 2.0);
@@ -128,7 +128,75 @@ pub fn show(
             });
         }
     });
+    scrollbar_date(ui, &out.inner_rect, images, rows, cols);
     response
+}
+
+/// Google Photos-style scrubber hint: while the pointer is over the grid's
+/// scrollbar, map its position on the track to a spot in the library and
+/// float a month/year pill next to it.
+fn scrollbar_date(
+    ui: &egui::Ui,
+    inner_rect: &Rect,
+    images: &[ImageRecord],
+    rows: usize,
+    cols: usize,
+) {
+    use chrono::TimeZone;
+
+    let Some(pos) = ui.ctx().pointer_latest_pos() else {
+        return;
+    };
+    // The bar lives between the scroll viewport and the panel's right edge;
+    // pad a little inward so the pill also shows while dragging the thumb.
+    let over_bar = pos.x >= inner_rect.right() - 6.0
+        && pos.x <= ui.max_rect().right() + 2.0
+        && (inner_rect.top()..=inner_rect.bottom()).contains(&pos.y);
+    if !over_bar {
+        return;
+    }
+
+    let frac = ((pos.y - inner_rect.top()) / inner_rect.height()).clamp(0.0, 1.0);
+    let row = ((rows.saturating_sub(1)) as f32 * frac).round() as usize;
+    let idx = (row * cols).min(images.len() - 1);
+    // Nearest record with a capture date (library order is by capture time).
+    let ts = images[idx..]
+        .iter()
+        .find_map(|rec| rec.capture_ts)
+        .or_else(|| images[..idx].iter().rev().find_map(|rec| rec.capture_ts));
+    let Some(label) = ts
+        .and_then(|ts| chrono::Local.timestamp_opt(ts, 0).earliest())
+        .map(|dt| dt.format("%B %Y").to_string())
+    else {
+        return;
+    };
+
+    let painter = ui.ctx().layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("grid-scrollbar-date"),
+    ));
+    let galley = painter.layout_no_wrap(label, theme::body_font(), theme::text_primary());
+    let pad = Vec2::new(10.0, 6.0);
+    let size = galley.size() + pad * 2.0;
+    let y = pos
+        .y
+        .clamp(inner_rect.top() + size.y / 2.0, inner_rect.bottom() - size.y / 2.0);
+    let pill = Rect::from_min_size(
+        egui::pos2(inner_rect.right() - size.x - 14.0, y - size.y / 2.0),
+        size,
+    );
+    painter.rect_filled(
+        pill,
+        egui::CornerRadius::same(theme::RADIUS_MD),
+        theme::bg_raised(),
+    );
+    painter.rect_stroke(
+        pill,
+        egui::CornerRadius::same(theme::RADIUS_MD),
+        egui::Stroke::new(1.0, theme::line_strong()),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(pill.min + pad, galley, theme::text_primary());
 }
 
 /// Small flag indicator in the cell's top-left corner.
