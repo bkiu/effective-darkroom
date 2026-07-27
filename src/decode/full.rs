@@ -52,8 +52,9 @@ pub fn decode_preview(rec: &ImageRecord) -> Result<FullImage> {
         }
         FileKind::Raw => {
             let mut raw = libraw_ffi::RawFile::open(&rec.abs_path).context("open raw")?;
-            let flip = raw.metadata().flip;
-            let as_shot = color::as_shot_wb(raw.cam_mul(), raw.cam_xyz())
+            let md = raw.metadata();
+            let flip = md.flip;
+            let as_shot = color::as_shot_wb(raw.cam_mul(), raw.cam_xyz(), &md.model)
                 .map(|(temp, tint)| AsShotWb { temp, tint });
             let img = match raw.extract_thumb().context("extract raw preview")? {
                 libraw_ffi::Thumb::Jpeg(bytes) => {
@@ -84,7 +85,8 @@ pub fn decode_preview(rec: &ImageRecord) -> Result<FullImage> {
 pub fn decode_linear_raw(rec: &ImageRecord) -> Result<FullImage> {
     let shot_info = crate::importer::metadata::read(&rec.abs_path, rec.kind);
     let mut raw = libraw_ffi::RawFile::open(&rec.abs_path).context("open raw")?;
-    let as_shot = color::as_shot_wb(raw.cam_mul(), raw.cam_xyz())
+    let model = raw.metadata().model;
+    let as_shot = color::as_shot_wb(raw.cam_mul(), raw.cam_xyz(), &model)
         .map(|(temp, tint)| AsShotWb { temp, tint });
     let decoded = raw.decode_linear(3).context("linear decode")?;
     let rgba = rgb16_to_rgba_f16(&decoded.rgb16);
