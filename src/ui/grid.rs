@@ -13,6 +13,10 @@ use crate::ui::theme;
 const CELL: f32 = 160.0;
 const PAD: f32 = 8.0;
 
+/// Upper bound on frames spent chasing the bottom of the grid at startup, so a
+/// library whose content height never stops growing can't pin the view there.
+const SETTLE_FRAMES: u8 = 8;
+
 pub struct GridState {
     pub textures: LruCache<i64, TextureHandle>,
     pub pending: HashSet<i64>,
@@ -22,16 +26,24 @@ pub struct GridState {
     pub anchor: Option<usize>,
     /// Image the user wants opened in loupe/develop.
     pub activated: Option<i64>,
-    /// One-shot: jump to the end of the grid (the newest photos, since the
-    /// library sorts oldest-first). Set at startup, consumed on the first
-    /// frame that actually shows photos.
-    pub scroll_to_bottom: bool,
+    /// Frames left to force the grid to the end (the newest photos, since the
+    /// library sorts oldest-first). Set at startup and re-applied until the
+    /// scroll actually lands at the bottom: egui lays the first frame out
+    /// against an unconstrained viewport, so its column count — and with it
+    /// the content height egui clamps the offset against — is nothing like
+    /// the real one, and a single-shot jump strands the view near the top.
+    pub scroll_to_bottom: u8,
     /// One-shot: restore this scroll offset (collection switches remember
     /// where each view was).
     pub restore_scroll: Option<f32>,
     /// Scroll offset as of the last drawn frame, for the app to stash away
     /// before switching views.
     pub scroll_offset: f32,
+    /// Content height of the last drawn frame. The startup jump waits for this
+    /// to stop changing: egui lays the first frame out against an
+    /// unconstrained viewport, and the bottom of *that* layout is nowhere near
+    /// the bottom of the real one.
+    last_content_h: f32,
 }
 
 impl Default for GridState {
@@ -43,9 +55,10 @@ impl Default for GridState {
             selection: HashSet::new(),
             anchor: None,
             activated: None,
-            scroll_to_bottom: true,
+            scroll_to_bottom: SETTLE_FRAMES,
             restore_scroll: None,
             scroll_offset: 0.0,
+            last_content_h: f32::NAN,
         }
     }
 }
@@ -118,9 +131,14 @@ pub fn show(
     let row_height = CELL + PAD;
 
     let mut scroll = egui::ScrollArea::vertical().auto_shrink([false, false]);
-    if std::mem::take(&mut state.scroll_to_bottom) {
-        // Past-the-end offset; egui clamps it to the real maximum.
-        scroll = scroll.vertical_scroll_offset(rows as f32 * row_height);
+    let jumping = state.scroll_to_bottom > 0;
+    if jumping {
+        // Past-the-end offset; egui clamps it to the real maximum. `show_rows`
+        // takes the row height *without* spacing and adds `item_spacing.y`
+        // between rows, so the content is taller than `rows * row_height` —
+        // count the spacing in or the jump lands short of the last row.
+        let stride = row_height + ui.spacing().item_spacing.y;
+        scroll = scroll.vertical_scroll_offset(rows as f32 * stride + row_height);
         state.restore_scroll = None;
     } else if let Some(offset) = state.restore_scroll.take() {
         scroll = scroll.vertical_scroll_offset(offset);
@@ -140,6 +158,20 @@ pub fn show(
         }
     });
     state.scroll_offset = out.state.offset.y;
+    if jumping {
+        // Only stop once the offset is at the bottom *and* the layout has
+        // stopped moving under it. Checking the offset alone gives up on the
+        // first frame, whose unconstrained viewport has its own — far
+        // shorter — bottom.
+        let max = (out.content_size.y - out.inner_rect.height()).max(0.0);
+        let settled = (out.content_size.y - state.last_content_h).abs() < 0.5;
+        state.scroll_to_bottom = if settled && out.state.offset.y >= max - 0.5 {
+            0
+        } else {
+            state.scroll_to_bottom - 1
+        };
+    }
+    state.last_content_h = out.content_size.y;
     scrollbar_timeline(ui, &out.inner_rect, images, rows, cols);
     response
 }
