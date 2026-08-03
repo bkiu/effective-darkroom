@@ -314,6 +314,16 @@ pub fn toggle_button(ui: &mut egui::Ui, active: bool, text: &str) -> egui::Respo
     )
 }
 
+/// ComboBox with egui's flat menu style applied to the popup. egui sizes
+/// unhovered popup items without their frame but keeps the frame's
+/// stroke-compensated padding, so our 1px inactive `bg_stroke` makes items
+/// grow (and the layout shift) on hover unless the popup drops the strokes
+/// like regular menus do.
+pub fn combo_box(id_salt: impl egui::AsIdSalt) -> egui::ComboBox {
+    egui::ComboBox::from_id_salt(id_salt)
+        .popup_style(egui::containers::menu::menu_style.into())
+}
+
 /// Primary (accent-filled) button, per the design's `primary` spec.
 pub fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     let rich = egui::RichText::new(text).color(on_accent()).font(FontId::new(

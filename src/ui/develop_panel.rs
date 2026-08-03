@@ -91,7 +91,7 @@ pub fn show(
                 });
                 ui.horizontal(|ui| {
                     ui.add_sized([70.0, 18.0], egui::Label::new("Aspect"));
-                    egui::ComboBox::from_id_salt("crop-aspect")
+                    theme::combo_box("crop-aspect")
                         .selected_text(crop_ui.aspect.label())
                         .show_ui(ui, |ui| {
                             for a in AspectChoice::ALL {

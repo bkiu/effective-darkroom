@@ -308,7 +308,7 @@ impl ExportDialog {
         ui.horizontal(|ui| {
             ui.label("Export to");
             let current_label = self.prefs.base.label();
-            egui::ComboBox::from_id_salt("export-base")
+            crate::ui::theme::combo_box("export-base")
                 .selected_text(current_label)
                 .show_ui(ui, |ui| {
                     for base in
@@ -475,7 +475,7 @@ impl ExportDialog {
                                 .as_ref()
                                 .map(|(_, name)| name.clone())
                                 .unwrap_or_else(|| "Choose an album…".into());
-                            egui::ComboBox::from_id_salt("immich-album")
+                            crate::ui::theme::combo_box("immich-album")
                                 .selected_text(current)
                                 .show_ui(ui, |ui| {
                                     for album in albums {
