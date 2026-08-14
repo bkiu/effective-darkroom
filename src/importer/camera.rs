@@ -78,12 +78,18 @@ pub fn list_card_files(camera: &Camera) -> Result<Vec<CardFile>> {
 
 /// Size in bytes as reported by the camera, if available.
 pub fn file_size(camera: &Camera, file: &CardFile) -> Option<u64> {
-    camera
-        .fs()
-        .file_info(&file.folder, &file.name)
-        .wait()
-        .ok()
-        .and_then(|info| info.file().size())
+    file_stat(camera, file).0
+}
+
+/// Size in bytes and modification time (unix seconds) as reported by the
+/// camera. The card's mtime is the shutter time for both our cameras, so the
+/// picker uses it to group by day without downloading anything.
+pub fn file_stat(camera: &Camera, file: &CardFile) -> (Option<u64>, Option<i64>) {
+    let Ok(info) = camera.fs().file_info(&file.folder, &file.name).wait() else {
+        return (None, None);
+    };
+    let f = info.file();
+    (f.size(), f.mtime().filter(|t| *t > 0))
 }
 
 pub fn download(camera: &Camera, file: &CardFile, dest: &Path) -> Result<()> {

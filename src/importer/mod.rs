@@ -72,8 +72,17 @@ pub struct ImportCandidate {
     pub key: usize,
     pub name: String,
     pub size: Option<u64>,
+    /// Capture time in unix seconds (camera-local clock), used to group the
+    /// picker by day. `None` when it can't be read.
+    pub capture_ts: Option<i64>,
     pub already_imported: bool,
     pub source: CandidateSource,
+}
+
+/// Local calendar day of a capture time, as the picker groups it and as the
+/// destination folder names it.
+pub fn capture_date(ts: i64) -> Option<chrono::NaiveDate> {
+    Local.timestamp_opt(ts, 0).earliest().map(|dt| dt.date_naive())
 }
 
 /// Expand directories and filter to importable extensions, sorted for a
@@ -253,16 +262,28 @@ fn scan_blocking(
     // Phase 1: enumerate candidates (no thumbs yet).
     let (candidates, cam) = match source {
         ScanSource::Paths(paths) => {
+            use rayon::prelude::*;
             let files = scan_sources(paths);
-            let candidates = files
-                .into_iter()
-                .enumerate()
-                .map(|(key, path)| {
+            // Header-only metadata reads dominate this phase, so fan them out;
+            // the catalog lookups stay on this thread (rusqlite isn't Sync).
+            let stats: Vec<(String, Option<u64>, Option<i64>)> = files
+                .par_iter()
+                .map(|path| {
                     let name = path
                         .file_name()
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default();
-                    let size = std::fs::metadata(&path).ok().map(|m| m.len());
+                    let size = std::fs::metadata(path).ok().map(|m| m.len());
+                    let capture_ts = FileKind::from_path(path)
+                        .and_then(|kind| metadata::read(path, kind).capture_ts);
+                    (name, size, capture_ts)
+                })
+                .collect();
+            let candidates = files
+                .into_iter()
+                .zip(stats)
+                .enumerate()
+                .map(|(key, (path, (name, size, capture_ts)))| {
                     let already_imported = catalog.contains_path(&path).unwrap_or(false)
                         || size
                             .map(|s| catalog.contains_similar(&name, s).unwrap_or(false))
@@ -271,6 +292,7 @@ fn scan_blocking(
                         key,
                         name,
                         size,
+                        capture_ts,
                         already_imported,
                         source: CandidateSource::Path(path),
                     }
@@ -285,7 +307,7 @@ fn scan_blocking(
                 .into_iter()
                 .enumerate()
                 .map(|(key, file)| {
-                    let size = camera::file_size(&cam, &file);
+                    let (size, capture_ts) = camera::file_stat(&cam, &file);
                     let already_imported = catalog.contains_name(&file.name).unwrap_or(false)
                         && size
                             .map(|s| {
@@ -296,6 +318,7 @@ fn scan_blocking(
                         key,
                         name: file.name.clone(),
                         size,
+                        capture_ts,
                         already_imported,
                         source: CandidateSource::Card(file),
                     }
@@ -304,6 +327,21 @@ fn scan_blocking(
             (candidates, Some(cam))
         }
     };
+
+    // Display order: newest day first (the shoot you just came back from is at
+    // the top), chronological within the day, undated last. Keys follow that
+    // order so thumbnails also stream in top-down.
+    let mut candidates = candidates;
+    candidates.sort_by_cached_key(|c| {
+        (
+            std::cmp::Reverse(c.capture_ts.and_then(capture_date)),
+            c.capture_ts,
+            c.name.clone(),
+        )
+    });
+    for (key, cand) in candidates.iter_mut().enumerate() {
+        cand.key = key;
+    }
 
     let _ = results.send(JobResult::ImportScanList {
         generation,

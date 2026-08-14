@@ -17,6 +17,23 @@ use crate::importer::{
 
 const CELL: f32 = 132.0;
 const PAD: f32 = 6.0;
+const CELL_ROW: f32 = CELL + PAD + 16.0;
+const HEADER_ROW: f32 = 30.0;
+
+/// One capture day's run of candidates. Candidates arrive already sorted into
+/// display order (newest day first, chronological within the day), so a group
+/// is a contiguous slice.
+struct DayGroup {
+    label: String,
+    start: usize,
+    len: usize,
+}
+
+/// A laid-out row of the picker: either a day header or a run of thumbnails.
+enum PickRow {
+    Header(usize),
+    Cells { start: usize, count: usize },
+}
 
 #[derive(Default)]
 pub struct ImportDialog {
@@ -34,7 +51,10 @@ pub struct ImportDialog {
     pub scan_generation: u64,
     scan_cancel: Option<Arc<AtomicBool>>,
     candidates: Vec<ImportCandidate>,
+    days: Vec<DayGroup>,
     checked: HashSet<usize>,
+    /// Candidate index of the last plain click; anchors shift-click ranges.
+    anchor: Option<usize>,
     thumbs: HashMap<usize, egui::TextureHandle>,
     scan_error: Option<String>,
     scan_pending: bool,
@@ -87,7 +107,9 @@ impl ImportDialog {
     fn reset_picker(&mut self) {
         self.cancel_scan();
         self.candidates.clear();
+        self.days.clear();
         self.checked.clear();
+        self.anchor = None;
         self.thumbs.clear();
         self.scan_error = None;
     }
@@ -127,6 +149,8 @@ impl ImportDialog {
             .filter(|c| !c.already_imported)
             .map(|c| c.key)
             .collect();
+        self.anchor = None;
+        self.days = day_groups(&candidates);
         self.candidates = candidates;
     }
 
@@ -381,29 +405,144 @@ impl ImportDialog {
 
         let avail = ui.available_width();
         let cols = ((avail + PAD) / (CELL + PAD)).floor().max(1.0) as usize;
-        let rows = self.candidates.len().div_ceil(cols);
+
+        // Row plan: a header per day, then that day's photos wrapped to `cols`.
+        // Heights vary, so virtualize by hand off cumulative offsets.
+        let mut rows: Vec<PickRow> = Vec::new();
+        let mut offsets: Vec<f32> = vec![0.0];
+        for (gi, g) in self.days.iter().enumerate() {
+            rows.push(PickRow::Header(gi));
+            offsets.push(offsets[offsets.len() - 1] + HEADER_ROW);
+            let mut i = 0;
+            while i < g.len {
+                let count = cols.min(g.len - i);
+                rows.push(PickRow::Cells {
+                    start: g.start + i,
+                    count,
+                });
+                offsets.push(offsets[offsets.len() - 1] + CELL_ROW);
+                i += count;
+            }
+        }
+        let total_h = *offsets.last().unwrap_or(&0.0);
+        let shift = ui.input(|i| i.modifiers.shift);
+
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .show_rows(ui, CELL + PAD + 16.0, rows, |ui, row_range| {
-                for row in row_range {
-                    ui.horizontal(|ui| {
-                        for col in 0..cols {
-                            let idx = row * cols + col;
-                            if idx >= self.candidates.len() {
-                                break;
-                            }
-                            self.candidate_cell(ui, idx);
-                        }
-                    });
+            .show_viewport(ui, |ui, viewport| {
+                if rows.is_empty() {
+                    return;
                 }
+                // Rows carry their own padding, so no vertical item spacing:
+                // the spacers above and below must land exactly on `offsets`.
+                ui.spacing_mut().item_spacing = Vec2::new(PAD, 0.0);
+                let first = offsets
+                    .partition_point(|&o| o <= viewport.min.y)
+                    .saturating_sub(1)
+                    .min(rows.len() - 1);
+                let last = offsets
+                    .partition_point(|&o| o < viewport.max.y)
+                    .clamp(first + 1, rows.len());
+                ui.add_space(offsets[first]);
+                for row in &rows[first..last] {
+                    match *row {
+                        PickRow::Header(gi) => self.day_header(ui, gi),
+                        PickRow::Cells { start, count } => {
+                            ui.horizontal(|ui| {
+                                for idx in start..start + count {
+                                    self.candidate_cell(ui, idx, shift);
+                                }
+                            });
+                        }
+                    }
+                }
+                ui.add_space(total_h - offsets[last]);
             });
     }
 
-    fn candidate_cell(&mut self, ui: &mut egui::Ui, idx: usize) {
+    /// A day separator: label, counts, and a click target that selects or
+    /// clears the whole day.
+    fn day_header(&mut self, ui: &mut egui::Ui, group: usize) {
+        let (label, start, len) = {
+            let g = &self.days[group];
+            (g.label.clone(), g.start, g.len)
+        };
+        let picked = self.candidates[start..start + len]
+            .iter()
+            .filter(|c| self.checked.contains(&c.key))
+            .count();
+
+        let (rect, response) = ui.allocate_exact_size(
+            Vec2::new(ui.available_width(), HEADER_ROW),
+            Sense::click(),
+        );
+        if ui.is_rect_visible(rect) {
+            let painter = ui.painter();
+            let inner = rect.shrink2(Vec2::new(0.0, 4.0));
+            if response.hovered() {
+                painter.rect_filled(inner, crate::ui::theme::RADIUS_SM, crate::ui::theme::bg_hover());
+            }
+            // Tri-state box: full check, half-filled, or empty.
+            let box_rect = Rect::from_center_size(
+                egui::pos2(inner.left() + 14.0, inner.center().y),
+                Vec2::splat(14.0),
+            );
+            painter.rect_stroke(
+                box_rect,
+                3.0,
+                egui::Stroke::new(1.0, crate::ui::theme::line_strong()),
+                egui::StrokeKind::Inside,
+            );
+            if picked == len {
+                painter.text(
+                    box_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "✔",
+                    egui::FontId::proportional(12.0),
+                    crate::ui::theme::accent(),
+                );
+            } else if picked > 0 {
+                painter.rect_filled(box_rect.shrink(4.0), 1.0, crate::ui::theme::accent());
+            }
+            painter.text(
+                egui::pos2(inner.left() + 28.0, inner.center().y),
+                egui::Align2::LEFT_CENTER,
+                &label,
+                crate::ui::theme::section_font(),
+                crate::ui::theme::text_primary(),
+            );
+            painter.text(
+                egui::pos2(inner.right() - 4.0, inner.center().y),
+                egui::Align2::RIGHT_CENTER,
+                format!("{picked} of {len} selected"),
+                egui::FontId::proportional(11.0),
+                crate::ui::theme::text_muted(),
+            );
+            let line_y = rect.bottom() - 1.0;
+            painter.hline(
+                rect.left()..=rect.right(),
+                line_y,
+                egui::Stroke::new(1.0, crate::ui::theme::line_subtle()),
+            );
+        }
+        if response.clicked() {
+            let select = picked < len;
+            for idx in start..start + len {
+                let key = self.candidates[idx].key;
+                if select {
+                    self.checked.insert(key);
+                } else {
+                    self.checked.remove(&key);
+                }
+            }
+            self.anchor = Some(start);
+        }
+    }
+
+    fn candidate_cell(&mut self, ui: &mut egui::Ui, idx: usize, shift: bool) {
         let cand = &self.candidates[idx];
         let key = cand.key;
-        let (rect, response) =
-            ui.allocate_exact_size(Vec2::new(CELL, CELL + 16.0), Sense::click());
+        let (rect, response) = ui.allocate_exact_size(Vec2::new(CELL, CELL_ROW), Sense::click());
         if !ui.is_rect_visible(rect) {
             return;
         }
@@ -458,17 +597,31 @@ impl ImportDialog {
             );
         }
         painter.text(
-            Rect::from_min_max(img_rect.left_bottom(), rect.max).center(),
+            egui::pos2(img_rect.center().x, img_rect.bottom() + 8.0),
             egui::Align2::CENTER_CENTER,
             &cand.name,
             egui::FontId::proportional(10.5),
             Color32::from_gray(if checked { 220 } else { 130 }),
         );
 
-        if response.clicked()
-            && !self.checked.insert(key) {
-                self.checked.remove(&key);
+        if response.clicked() {
+            // Shift-click paints the whole span from the last click with the
+            // state this photo is flipping to; a plain click toggles one.
+            let want = !checked;
+            let span = match (shift, self.anchor) {
+                (true, Some(anchor)) => anchor.min(idx)..=anchor.max(idx),
+                _ => idx..=idx,
+            };
+            for i in span {
+                let k = self.candidates[i].key;
+                if want {
+                    self.checked.insert(k);
+                } else {
+                    self.checked.remove(&k);
+                }
             }
+            self.anchor = Some(idx);
+        }
     }
 
     fn importing_ui(&mut self, ui: &mut egui::Ui) {
@@ -616,5 +769,74 @@ impl ImportDialog {
                 .small(),
             );
         }
+    }
+}
+
+/// Split candidates into runs of one capture day. The scanner hands them over
+/// already ordered (newest day first, undated last), so equal neighbouring
+/// dates are all one group.
+fn day_groups(candidates: &[ImportCandidate]) -> Vec<DayGroup> {
+    let mut groups: Vec<DayGroup> = Vec::new();
+    let mut prev: Option<Option<chrono::NaiveDate>> = None;
+    for (i, cand) in candidates.iter().enumerate() {
+        let date = cand.capture_ts.and_then(crate::importer::capture_date);
+        if prev == Some(date) {
+            if let Some(g) = groups.last_mut() {
+                g.len += 1;
+            }
+            continue;
+        }
+        groups.push(DayGroup {
+            label: match date {
+                Some(d) => d.format("%a %-d %b %Y").to_string(),
+                None => "Date unknown".to_string(),
+            },
+            start: i,
+            len: 1,
+        });
+        prev = Some(date);
+    }
+    groups
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::importer::CandidateSource;
+    use chrono::TimeZone;
+
+    fn cand(key: usize, ts: Option<i64>) -> ImportCandidate {
+        ImportCandidate {
+            key,
+            name: format!("IMG_{key}.CR3"),
+            size: Some(1),
+            capture_ts: ts,
+            already_imported: false,
+            source: CandidateSource::Path(std::path::PathBuf::from("/x")),
+        }
+    }
+
+    /// Local noon on a given date, so grouping never straddles a day boundary.
+    fn noon(y: i32, m: u32, d: u32) -> i64 {
+        chrono::Local
+            .with_ymd_and_hms(y, m, d, 12, 0, 0)
+            .earliest()
+            .unwrap()
+            .timestamp()
+    }
+
+    #[test]
+    fn groups_runs_of_one_day() {
+        let cands = vec![
+            cand(0, Some(noon(2026, 7, 12))),
+            cand(1, Some(noon(2026, 7, 12) + 60)),
+            cand(2, Some(noon(2026, 7, 11))),
+            cand(3, None),
+        ];
+        let groups = day_groups(&cands);
+        assert_eq!(groups.len(), 3);
+        assert_eq!((groups[0].start, groups[0].len), (0, 2));
+        assert_eq!((groups[1].start, groups[1].len), (2, 1));
+        assert_eq!(groups[2].label, "Date unknown");
     }
 }
