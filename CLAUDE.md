@@ -48,8 +48,10 @@ changes run `cargo build --release` or the launcher serves a stale binary.
   `egui::Context` and `request_repaint()`. Decode thread is latest-wins.
 - `src/ui/` — one module per surface (grid, loupe, filmstrip, develop panel,
   tone curve, dialogs, top bar). `src/app.rs` owns all state; `visible` is the
-  filtered image list (collection + flag filters) that grid/filmstrip/arrows
-  navigate.
+  filtered image list that grid/filmstrip/arrows navigate, derived from the
+  active `LibrarySource` (All / LastImport / Collection) plus the flag
+  filters. Last Import reads `images.import_batch`, stamped once per import
+  run; batch 0 means "predates the column" and is never a run.
 
 ## Dev/test tooling (cargo examples)
 

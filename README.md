@@ -28,8 +28,10 @@ release binary.
 - **Library**: thumbnail grid with multi-selection, loupe with fit/1:1 zoom
   and panning, filmstrip and a flag/delete toolbar in the single-image
   views, EXIF info overlay (shutter, aperture, ISO, focal length, …).
-- **Collections & flags**: named collections in the left panel; pick/reject
-  flags with distinct badges (rejects render dimmed); a Show filter row
+- **Collections & flags**: All Photos, a Last Import view holding whatever
+  the most recent import run brought in, and named collections, all in the
+  left panel; pick/reject flags with distinct badges (rejects render
+  dimmed); a Show filter row
   narrows any view by flag status and drives grid, filmstrip and arrow-key
   navigation alike.
 - **Develop** (upper-right tab): Crop & straighten (interactive overlay

@@ -83,11 +83,18 @@ impl Catalog {
         Ok(())
     }
 
+    /// Insert outside any import run (tests, one-off tooling).
     pub fn insert_image(&self, rec: &ImageRecord) -> Result<i64> {
+        self.insert_image_in_batch(rec, 0)
+    }
+
+    /// Insert as part of import run `import_batch` (see `next_import_batch`).
+    pub fn insert_image_in_batch(&self, rec: &ImageRecord, import_batch: i64) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO images (abs_path, file_name, kind, capture_ts, imported_ts,
-                                 width, height, orientation, camera_make, camera_model, file_size)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                                 width, height, orientation, camera_make, camera_model,
+                                 file_size, import_batch)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 rec.abs_path.to_string_lossy(),
                 rec.file_name,
@@ -100,9 +107,34 @@ impl Catalog {
                 rec.camera_make,
                 rec.camera_model,
                 rec.file_size,
+                import_batch,
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Number for the next import run. Taken once when a run starts, so every
+    /// photo it brings in shares it however long the run takes.
+    pub fn next_import_batch(&self) -> Result<i64> {
+        let max: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(import_batch), 0) FROM images",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(max + 1)
+    }
+
+    /// Images from the most recent import run. Empty when nothing has been
+    /// imported since the catalog started recording batches — batch 0 is not
+    /// a run, it is everything that predates the column.
+    pub fn last_import_image_ids(&self) -> Result<std::collections::HashSet<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM images
+             WHERE import_batch > 0
+               AND import_batch = (SELECT MAX(import_batch) FROM images)",
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, i64>(0))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
     pub fn contains_path(&self, abs_path: &Path) -> Result<bool> {
@@ -412,6 +444,40 @@ mod tests {
         // Duplicate collection names are rejected.
         cat.create_collection("X").unwrap();
         assert!(cat.create_collection("X").is_err());
+    }
+
+    #[test]
+    fn import_batches_group_a_run_and_expose_the_latest() {
+        let cat = mem_catalog();
+
+        // A run takes its number once and stamps every photo with it.
+        let first = cat.next_import_batch().unwrap();
+        assert_eq!(first, 1);
+        let a = cat.insert_image_in_batch(&sample("/lib/a.jpg"), first).unwrap();
+        let b = cat.insert_image_in_batch(&sample("/lib/b.jpg"), first).unwrap();
+        assert_eq!(cat.last_import_image_ids().unwrap(), [a, b].into());
+
+        // The next run supersedes it rather than adding to it.
+        let second = cat.next_import_batch().unwrap();
+        assert_eq!(second, 2);
+        let c = cat.insert_image_in_batch(&sample("/lib/c.jpg"), second).unwrap();
+        assert_eq!(cat.last_import_image_ids().unwrap(), [c].into());
+
+        // Deleting the newest run falls back to the one before it, so the
+        // view is never left pointing at nothing while photos remain.
+        cat.delete_images(&[c]).unwrap();
+        assert_eq!(cat.last_import_image_ids().unwrap(), [a, b].into());
+    }
+
+    #[test]
+    fn photos_predating_batches_are_not_a_last_import() {
+        let cat = mem_catalog();
+        // Batch 0 is what the v3 migration leaves on existing rows. Treating
+        // it as a run would make "Last Import" mean "everything".
+        cat.insert_image(&sample("/lib/old.jpg")).unwrap();
+        assert!(cat.last_import_image_ids().unwrap().is_empty());
+        // ...and the first real run still numbers from 1.
+        assert_eq!(cat.next_import_batch().unwrap(), 1);
     }
 
     #[test]

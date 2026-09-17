@@ -1,7 +1,7 @@
 //! Catalog schema and migrations. Bump `SCHEMA_VERSION` and append a step to
 //! `MIGRATIONS` for any change; steps run in order inside one transaction.
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 pub const MIGRATIONS: &[&str] = &[
     // v1
@@ -43,5 +43,12 @@ pub const MIGRATIONS: &[&str] = &[
         image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
         PRIMARY KEY (collection_id, image_id)
     );
+    ",
+    // v3: which import run brought each photo in, so the library can show
+    // the last one on its own. 0 means "imported before this column
+    // existed"; batches proper are numbered from 1.
+    "
+    ALTER TABLE images ADD COLUMN import_batch INTEGER NOT NULL DEFAULT 0;
+    CREATE INDEX idx_images_import_batch ON images(import_batch);
     ",
 ];

@@ -26,6 +26,24 @@ pub enum View {
     Develop,
 }
 
+/// Which set of photos the library shows: everything, just the most recent
+/// import, or one collection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LibrarySource {
+    All,
+    LastImport,
+    Collection(i64),
+}
+
+impl LibrarySource {
+    fn collection(self) -> Option<i64> {
+        match self {
+            LibrarySource::Collection(id) => Some(id),
+            _ => None,
+        }
+    }
+}
+
 /// Within the Library module: thumbnail grid or single-image loupe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LibraryMode {
@@ -153,12 +171,13 @@ pub struct App {
     visible: Vec<ImageRecord>,
     visible_dirty: bool,
     collections: Vec<Collection>,
-    /// Remembered grid scroll offset per view (None = All Photos), so
-    /// switching collections returns to where each one was.
-    scroll_positions: std::collections::HashMap<Option<i64>, f32>,
-    /// None = All Photos.
-    active_collection: Option<i64>,
+    /// Remembered grid scroll offset per view, so switching between them
+    /// returns to where each one was.
+    scroll_positions: std::collections::HashMap<LibrarySource, f32>,
+    source: LibrarySource,
     collection_members: std::collections::HashSet<i64>,
+    /// Ids from the most recent import run (the Last Import view).
+    last_import: std::collections::HashSet<i64>,
     filters: crate::ui::filters::FilterState,
     /// Ids of images with stored edits (for the Edited filter facet).
     edited_ids: std::collections::HashSet<i64>,
@@ -274,8 +293,9 @@ impl App {
             visible_dirty: true,
             collections,
             scroll_positions: Default::default(),
-            active_collection: None,
+            source: LibrarySource::All,
             collection_members: Default::default(),
+            last_import: Default::default(),
             filters: Default::default(),
             edited_ids: Default::default(),
             new_collection_name: None,
@@ -329,18 +349,22 @@ impl App {
             return;
         }
         self.visible_dirty = false;
-        if let Some(cid) = self.active_collection {
+        if let Some(cid) = self.source.collection() {
             self.collection_members = self.catalog.collection_image_ids(cid).unwrap_or_default();
         }
+        // Always refreshed, not just when it is the active view: the sidebar
+        // row shows the count whichever view is open.
+        self.last_import = self.catalog.last_import_image_ids().unwrap_or_default();
         self.edited_ids = self.catalog.edited_image_ids().unwrap_or_default();
-        let in_collection = |r: &ImageRecord| match self.active_collection {
-            Some(_) => self.collection_members.contains(&r.id),
-            None => true,
+        let in_source = |r: &ImageRecord| match self.source {
+            LibrarySource::All => true,
+            LibrarySource::LastImport => self.last_import.contains(&r.id),
+            LibrarySource::Collection(_) => self.collection_members.contains(&r.id),
         };
         self.visible = self
             .images
             .iter()
-            .filter(|r| in_collection(r) && self.filters.matches(r, &self.edited_ids))
+            .filter(|r| in_source(r) && self.filters.matches(r, &self.edited_ids))
             .cloned()
             .collect();
         // Drop selection entries that are no longer visible.
@@ -350,23 +374,23 @@ impl App {
     }
 
     /// Change the viewed collection, remembering each view's scroll spot.
-    fn switch_collection(&mut self, new: Option<i64>) {
-        if self.active_collection == new {
+    fn switch_source(&mut self, new: LibrarySource) {
+        if self.source == new {
             return;
         }
         self.scroll_positions
-            .insert(self.active_collection, self.grid.scroll_offset);
+            .insert(self.source, self.grid.scroll_offset);
         self.grid.restore_scroll =
             Some(self.scroll_positions.get(&new).copied().unwrap_or(0.0));
-        self.active_collection = new;
+        self.source = new;
         self.visible_dirty = true;
     }
 
     fn reload_collections(&mut self) {
         self.collections = self.catalog.list_collections().unwrap_or_default();
-        if let Some(cid) = self.active_collection {
+        if let Some(cid) = self.source.collection() {
             if !self.collections.iter().any(|c| c.id == cid) {
-                self.switch_collection(None);
+                self.switch_source(LibrarySource::All);
             }
         }
         self.visible_dirty = true;
@@ -992,11 +1016,30 @@ impl App {
                     ui,
                     "All Photos",
                     total,
-                    self.active_collection.is_none(),
+                    self.source == LibrarySource::All,
                 )
                 .clicked()
                 {
-                    self.switch_collection(None);
+                    self.switch_source(LibrarySource::All);
+                }
+
+                // Sits above the user's own collections, and only once there
+                // is a run to show: a catalog filled before this build
+                // recorded batches has nothing to point at, and a permanent
+                // "0" row would just be a dead end.
+                if !self.last_import.is_empty() {
+                    let resp = crate::ui::widgets::collection_row(
+                        ui,
+                        "Last Import",
+                        self.last_import.len(),
+                        self.source == LibrarySource::LastImport,
+                    );
+                    if resp
+                        .on_hover_text("Photos from the most recent import")
+                        .clicked()
+                    {
+                        self.switch_source(LibrarySource::LastImport);
+                    }
                 }
 
                 let mut activate_collection = None;
@@ -1048,7 +1091,7 @@ impl App {
                         continue;
                     }
 
-                    let selected = self.active_collection == Some(col.id);
+                    let selected = self.source == LibrarySource::Collection(col.id);
                     let resp = crate::ui::widgets::collection_row(
                         ui,
                         &col.name,
@@ -1070,7 +1113,7 @@ impl App {
                     });
                 }
                 if let Some(cid) = activate_collection {
-                    self.switch_collection(Some(cid));
+                    self.switch_source(LibrarySource::Collection(cid));
                 }
                 if let Some((cid, name)) = rename_to {
                     if let Err(e) = self.catalog.rename_collection(cid, &name) {
@@ -1121,7 +1164,7 @@ impl App {
                         match self.catalog.create_collection(&trimmed) {
                             Ok(cid) => {
                                 self.reload_collections();
-                                self.active_collection = Some(cid);
+                                self.switch_source(LibrarySource::Collection(cid));
                             }
                             Err(e) => tracing::error!("create collection: {e:#}"),
                         }
@@ -1155,13 +1198,20 @@ impl App {
                 }
                 self.visible_dirty = true;
             }
-            if let Some(cid) = self.active_collection {
-                if let Some(col) = self.collections.iter().find(|c| c.id == cid) {
-                    ui.separator();
-                    ui.label(
-                        egui::RichText::new(format!("Collection: {}", col.name)).weak(),
-                    );
+            match self.source {
+                LibrarySource::Collection(cid) => {
+                    if let Some(col) = self.collections.iter().find(|c| c.id == cid) {
+                        ui.separator();
+                        ui.label(
+                            egui::RichText::new(format!("Collection: {}", col.name)).weak(),
+                        );
+                    }
                 }
+                LibrarySource::LastImport => {
+                    ui.separator();
+                    ui.label(egui::RichText::new("Last Import").weak());
+                }
+                LibrarySource::All => {}
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
@@ -1626,7 +1676,8 @@ impl eframe::App for App {
                             self.ensure_visible();
                             self.show_filter_row(ui);
                             let viewing_collection = self
-                                .active_collection
+                                .source
+                                .collection()
                                 .and_then(|cid| {
                                     self.collections.iter().find(|c| c.id == cid)
                                 })
@@ -1657,7 +1708,7 @@ impl eframe::App for App {
                                 self.reload_collections();
                             }
                             if resp.remove_from_collection {
-                                if let Some(cid) = self.active_collection {
+                                if let Some(cid) = self.source.collection() {
                                     let ids: Vec<i64> =
                                         self.grid.selection.iter().copied().collect();
                                     if let Err(e) =

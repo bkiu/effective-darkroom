@@ -161,6 +161,9 @@ fn import_paths(
     let files = scan_sources(paths);
     let total = files.len();
     let mut outcome = ImportOutcome::default();
+    // Taken once: every photo this run brings in belongs to the same batch,
+    // however long the run takes or however many files it skips.
+    let batch = catalog.next_import_batch()?;
 
     for (i, src) in files.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
@@ -172,7 +175,7 @@ fn import_paths(
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         progress(i + 1, total, &name);
-        match import_one(catalog, spec.mode, &spec.dest_root, src) {
+        match import_one(catalog, spec.mode, &spec.dest_root, src, batch) {
             Ok(ImportedFile::Added) => outcome.imported += 1,
             Ok(ImportedFile::Duplicate) => outcome.skipped_duplicates += 1,
             Err(e) => outcome.errors.push(format!("{name}: {e:#}")),
@@ -190,6 +193,7 @@ fn import_camera(
     mut progress: impl FnMut(usize, usize, &str),
 ) -> Result<ImportOutcome> {
     let mut outcome = ImportOutcome::default();
+    let batch = catalog.next_import_batch()?;
     progress(0, 0, "connecting to camera…");
     let cam = camera::connect(desc)?;
     let total = files.len();
@@ -209,7 +213,7 @@ fn import_camera(
         progress(i + 1, total, &file.name);
         let staged = staging.join(&file.name);
         let result = camera::download(&cam, file, &staged).and_then(|()| {
-            import_one(catalog, ImportMode::Move, &spec.dest_root, &staged)
+            import_one(catalog, ImportMode::Move, &spec.dest_root, &staged, batch)
         });
         match result {
             Ok(ImportedFile::Added) => outcome.imported += 1,
@@ -410,6 +414,7 @@ fn import_one(
     mode: ImportMode,
     dest_root: &Path,
     src: &Path,
+    batch: i64,
 ) -> Result<ImportedFile> {
     let kind = FileKind::from_path(src).context("unsupported file type")?;
     let file_size = std::fs::metadata(src).context("stat source")?.len();
@@ -463,7 +468,9 @@ fn import_one(
         file_size,
         flag: crate::catalog::Flag::Unflagged,
     };
-    catalog.insert_image(&rec).context("insert into catalog")?;
+    catalog
+        .insert_image_in_batch(&rec, batch)
+        .context("insert into catalog")?;
     Ok(ImportedFile::Added)
 }
 
