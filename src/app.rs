@@ -35,8 +35,13 @@ pub enum LibraryMode {
 
 const SAVE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// Zoom ratio per +/- keypress or toolbar zoom-button click.
+/// Zoom ratio per +/- keypress.
 const ZOOM_STEP: f32 = 1.5;
+
+/// Width of the loupe toolbar's zoom slider, label and readout included.
+/// Sized so the row still has room for the filmstrip toggle beside it with
+/// the develop panel open, which is the narrowest this toolbar ever gets.
+const ZOOM_SLIDER_W: f32 = 160.0;
 
 /// Small persisted app config (not part of the catalog).
 #[derive(Default, Serialize, Deserialize)]
@@ -1291,35 +1296,30 @@ impl App {
                     {
                         loupe.set_zoom(1.0);
                     }
-                    if ui
-                        .add_enabled(
-                            loupe.zoom_percent() > loupe::MIN_ZOOM * 100.0 + 0.5,
-                            egui::Button::new("-"),
-                        )
-                        .on_hover_text("Zoom out (-)")
-                        .clicked()
-                    {
-                        loupe.zoom_by(1.0 / ZOOM_STEP);
+                    // Log scale: fit is often single digits while 1:1 and
+                    // above are hundreds, and a linear track would bury the
+                    // whole useful range in its first centimetre.
+                    let (lo, hi) = (loupe::MIN_ZOOM * 100.0, loupe::MAX_ZOOM * 100.0);
+                    let mut percent = loupe.zoom_percent().clamp(lo, hi);
+                    let moved = crate::ui::widgets::Adjustment {
+                        label: "Zoom",
+                        value: &mut percent,
+                        min: lo,
+                        max: hi,
+                        // Double-click snaps to 1:1, as on the develop
+                        // panel's sliders.
+                        default: 100.0,
+                        bipolar: false,
+                        decimals: 0,
+                        logarithmic: true,
+                        step: 10.0,
+                        suffix: "%",
+                        width: Some(ZOOM_SLIDER_W),
                     }
-                    ui.add_sized(
-                        [44.0, ui.available_height()],
-                        egui::Label::new(
-                            egui::RichText::new(format!("{:.0}%", loupe.zoom_percent()))
-                                .monospace(),
-                        ),
-                    )
-                    .on_hover_text("Scroll the photo to zoom; drag to pan");
-                    if ui
-                        .add_enabled(
-                            loupe.zoom_percent() < loupe::MAX_ZOOM * 100.0 - 0.5,
-                            egui::Button::new("+"),
-                        )
-                        .on_hover_text("Zoom in (+)")
-                        .clicked()
-                    {
-                        loupe.zoom_by(ZOOM_STEP);
+                    .show(ui);
+                    if moved {
+                        loupe.set_zoom(percent / 100.0);
                     }
-                    ui.separator();
                 }
 
                 if crate::ui::theme::toggle_button(ui, !strip_collapsed, "Filmstrip")

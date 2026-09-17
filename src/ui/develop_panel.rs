@@ -220,6 +220,8 @@ fn slider(
         } else {
             1.0
         },
+        suffix: "",
+        width: None,
     }
     .show(ui)
 }

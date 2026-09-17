@@ -19,6 +19,12 @@ pub struct Adjustment<'a> {
     pub logarithmic: bool,
     /// Increment for arrow keys while editing the value.
     pub step: f32,
+    /// Unit appended to the readout, e.g. "%".
+    pub suffix: &'a str,
+    /// Total widget width. `None` fills the available space, which is what
+    /// the develop panel's stacked rows want; an inline slider in a toolbar
+    /// has to say how much room it may take instead.
+    pub width: Option<f32>,
 }
 
 const LABEL_W: f32 = 72.0;
@@ -49,27 +55,62 @@ impl Adjustment<'_> {
 
     fn format(&self) -> String {
         let v = *self.value;
-        if self.decimals == 0 {
+        let n = if self.decimals == 0 {
             format!("{}", v.round() as i64)
         } else if self.bipolar && v > 0.0 {
             format!("+{v:.prec$}", prec = self.decimals)
         } else {
             format!("{v:.prec$}", prec = self.decimals)
-        }
+        };
+        format!("{n}{}", self.suffix)
     }
 
     /// Returns true when the value changed.
     pub fn show(self, ui: &mut egui::Ui) -> bool {
-        let mut changed = false;
-        ui.horizontal(|ui| {
-            ui.add_sized(
-                [LABEL_W, ROW_H],
-                egui::Label::new(
-                    egui::RichText::new(self.label).color(theme::text_secondary()),
-                ),
-            );
+        match self.width {
+            // Inline use is already inside a horizontal layout. Nesting
+            // another one there leaves `horizontal_wrapped` thinking the line
+            // is full, so everything after it breaks onto a new row.
+            Some(_) => self.row(ui),
+            None => ui.horizontal(|ui| self.row(ui)).inner,
+        }
+    }
 
-            let track_w = (ui.available_width() - VALUE_W - 8.0).max(40.0);
+    fn row(self, ui: &mut egui::Ui) -> bool {
+        let mut changed = false;
+        {
+            // Inline use pays for its own label rather than the panel's fixed
+            // column, which would be mostly dead space in a toolbar.
+            let label_w = match self.width {
+                Some(_) => ui
+                    .painter()
+                    .layout_no_wrap(
+                        self.label.to_owned(),
+                        egui::TextStyle::Body.resolve(ui.style()),
+                        theme::text_secondary(),
+                    )
+                    .size()
+                    .x,
+                None => LABEL_W,
+            };
+            if !self.label.is_empty() {
+                ui.add_sized(
+                    [label_w, ROW_H],
+                    egui::Label::new(
+                        egui::RichText::new(self.label).color(theme::text_secondary()),
+                    ),
+                );
+            }
+
+            // The panel rows fill whatever they are given; an inline slider
+            // divides up the width it was told to occupy. These must stay
+            // separate: feeding `available_width` through a width budget lets
+            // a content-sized panel grow by the difference every frame.
+            let track_w = match self.width {
+                Some(total) => total - label_w - VALUE_W - 8.0,
+                None => ui.available_width() - VALUE_W - 8.0,
+            }
+            .max(40.0);
             let (rect, resp) =
                 ui.allocate_exact_size(Vec2::new(track_w, ROW_H), Sense::click_and_drag());
 
@@ -227,7 +268,7 @@ impl Adjustment<'_> {
                     });
                 }
             }
-        });
+        }
         changed
     }
 }
@@ -349,4 +390,70 @@ pub fn collection_row(
         theme::text_muted(),
     );
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn adjustment<'a>(value: &'a mut f32, min: f32, max: f32, log: bool) -> Adjustment<'a> {
+        Adjustment {
+            label: "Zoom",
+            value,
+            min,
+            max,
+            default: 100.0,
+            bipolar: false,
+            decimals: 0,
+            logarithmic: log,
+            step: 10.0,
+            suffix: "%",
+            width: Some(160.0),
+        }
+    }
+
+    #[test]
+    fn log_track_position_round_trips() {
+        // The zoom slider's range. A drag reads the handle position back out
+        // of `from_t`, so a mapping that is not its own inverse makes the
+        // handle jump away from the pointer.
+        let mut v = 100.0;
+        let adj = adjustment(&mut v, 5.0, 1600.0, true);
+        for value in [5.0, 25.0, 100.0, 400.0, 1600.0] {
+            let t = adj.to_t(value);
+            assert!((0.0..=1.0).contains(&t), "{value}% mapped outside the track");
+            assert!(
+                (adj.from_t(t) - value).abs() < value * 0.001,
+                "{value}% round-tripped to {}",
+                adj.from_t(t)
+            );
+        }
+    }
+
+    #[test]
+    fn log_track_gives_fit_range_real_estate() {
+        // The point of the log scale: 100% sits near the middle rather than
+        // being crushed into the first few pixels as it would linearly.
+        let mut v = 100.0;
+        let adj = adjustment(&mut v, 5.0, 1600.0, true);
+        let t = adj.to_t(100.0);
+        assert!((0.4..0.6).contains(&t), "1:1 sits at {t} along the track");
+        // Everything below 1:1 still gets a usable share of it.
+        assert!(adj.to_t(25.0) > 0.2, "25% is crushed against the left end");
+    }
+
+    #[test]
+    fn readout_carries_its_unit() {
+        let mut v = 28.4;
+        let adj = adjustment(&mut v, 5.0, 1600.0, true);
+        assert_eq!(adj.format(), "28%");
+    }
+
+    #[test]
+    fn out_of_range_values_stay_on_the_track() {
+        let mut v = 100.0;
+        let adj = adjustment(&mut v, 5.0, 1600.0, true);
+        assert_eq!(adj.to_t(1.0), 0.0);
+        assert_eq!(adj.to_t(99_999.0), 1.0);
+    }
 }

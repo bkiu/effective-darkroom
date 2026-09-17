@@ -76,7 +76,9 @@ release binary.
 | `Ctrl` `+`/`-`/`0` | UI zoom |
 
 In the loupe and develop views the mouse wheel zooms the photo around the
-pointer, and dragging pans once it no longer fits the window.
+pointer, and dragging pans once it no longer fits the window. The toolbar
+under the photo has Fit and 1:1 buttons and a log-scale zoom slider whose
+readout can be clicked to type an exact percentage.
 
 ## Storage
 
