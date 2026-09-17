@@ -25,9 +25,10 @@ release binary.
   into `YYYY/MM-DD` folders by capture date (copy or move for file imports;
   camera imports never touch the card). On first start the app asks where
   the library should live and uses it as the default destination.
-- **Library**: thumbnail grid with multi-selection, loupe with fit/1:1 zoom
-  and panning, filmstrip and a flag/delete toolbar in the single-image
-  views, EXIF info overlay (shutter, aperture, ISO, focal length, …).
+- **Library**: thumbnail grid with multi-selection, loupe with continuous
+  wheel zoom and panning, filmstrip and a flag/delete toolbar in the
+  single-image views (both collapsible behind one caret), EXIF info overlay
+  (shutter, aperture, ISO, focal length, …).
 - **Collections & flags**: All Photos, a Last Import view holding whatever
   the most recent import run brought in, and named collections, all in the
   left panel; pick/reject flags with distinct badges (rejects render
@@ -72,15 +73,19 @@ release binary.
 | `I` | EXIF info overlay |
 | `Delete` | Remove from library / move to trash |
 | `Ctrl` `A` | Select every photo in the current view |
-| `F6` | Show / hide the filmstrip |
+| `F6` | Show / hide the toolbar and filmstrip |
 | `Z` | Photo zoom: toggle fit and 1:1 (double-click does the same) |
 | `+` / `-` / `0` | Photo zoom in / out / fit |
 | `Ctrl` `+`/`-`/`0` | UI zoom |
+| `↑` / `↓` | Step the slider under the pointer |
+
+In the delete confirmation, `Enter` removes from the library, `T` moves the
+files to the trash, and `Esc` cancels.
 
 In the loupe and develop views the mouse wheel zooms the photo around the
-pointer, and dragging pans once it no longer fits the window. The toolbar
-under the photo has Fit and 1:1 buttons and a log-scale zoom slider whose
-readout can be clicked to type an exact percentage.
+pointer, and dragging pans once it no longer fits the window. The caret at
+the right of the toolbar folds the toolbar and filmstrip away to give the
+photo the whole panel.
 
 ## Storage
 

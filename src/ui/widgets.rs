@@ -17,14 +17,9 @@ pub struct Adjustment<'a> {
     pub decimals: usize,
     /// Log-scale mapping (Kelvin temperature).
     pub logarithmic: bool,
-    /// Increment for arrow keys while editing the value.
+    /// Increment for the arrow keys, both while hovering and while editing
+    /// the value.
     pub step: f32,
-    /// Unit appended to the readout, e.g. "%".
-    pub suffix: &'a str,
-    /// Total widget width. `None` fills the available space, which is what
-    /// the develop panel's stacked rows want; an inline slider in a toolbar
-    /// has to say how much room it may take instead.
-    pub width: Option<f32>,
 }
 
 const LABEL_W: f32 = 72.0;
@@ -55,64 +50,52 @@ impl Adjustment<'_> {
 
     fn format(&self) -> String {
         let v = *self.value;
-        let n = if self.decimals == 0 {
+        if self.decimals == 0 {
             format!("{}", v.round() as i64)
         } else if self.bipolar && v > 0.0 {
             format!("+{v:.prec$}", prec = self.decimals)
         } else {
             format!("{v:.prec$}", prec = self.decimals)
-        };
-        format!("{n}{}", self.suffix)
+        }
     }
 
     /// Returns true when the value changed.
     pub fn show(self, ui: &mut egui::Ui) -> bool {
-        match self.width {
-            // Inline use is already inside a horizontal layout. Nesting
-            // another one there leaves `horizontal_wrapped` thinking the line
-            // is full, so everything after it breaks onto a new row.
-            Some(_) => self.row(ui),
-            None => ui.horizontal(|ui| self.row(ui)).inner,
-        }
-    }
-
-    fn row(self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        {
-            // Inline use pays for its own label rather than the panel's fixed
-            // column, which would be mostly dead space in a toolbar.
-            let label_w = match self.width {
-                Some(_) => ui
-                    .painter()
-                    .layout_no_wrap(
-                        self.label.to_owned(),
-                        egui::TextStyle::Body.resolve(ui.style()),
-                        theme::text_secondary(),
-                    )
-                    .size()
-                    .x,
-                None => LABEL_W,
-            };
-            if !self.label.is_empty() {
-                ui.add_sized(
-                    [label_w, ROW_H],
-                    egui::Label::new(
-                        egui::RichText::new(self.label).color(theme::text_secondary()),
-                    ),
-                );
-            }
+        ui.horizontal(|ui| {
+            ui.add_sized(
+                [LABEL_W, ROW_H],
+                egui::Label::new(
+                    egui::RichText::new(self.label).color(theme::text_secondary()),
+                ),
+            );
 
-            // The panel rows fill whatever they are given; an inline slider
-            // divides up the width it was told to occupy. These must stay
-            // separate: feeding `available_width` through a width budget lets
-            // a content-sized panel grow by the difference every frame.
-            let track_w = match self.width {
-                Some(total) => total - label_w - VALUE_W - 8.0,
-                None => ui.available_width() - VALUE_W - 8.0,
-            }
-            .max(40.0);
+            let track_w = (ui.available_width() - VALUE_W - 8.0).max(40.0);
             let (rect, resp) =
                 ui.allocate_exact_size(Vec2::new(track_w, ROW_H), Sense::click_and_drag());
+
+            // Arrow keys while the pointer is over the track, so a value can
+            // be nudged without clicking into the readout first. Skipped
+            // while the readout is being typed into, which handles its own
+            // arrows — otherwise both fire and the value moves two steps.
+            let edit_id = ui.id().with(("adjust-edit", self.label));
+            let typing = ui.memory(|m| m.data.get_temp::<String>(edit_id)).is_some();
+            if resp.hovered() && !typing {
+                let (up, down) = ui.input(|i| {
+                    (
+                        i.key_pressed(egui::Key::ArrowUp),
+                        i.key_pressed(egui::Key::ArrowDown),
+                    )
+                });
+                if up != down {
+                    let step = if up { self.step } else { -self.step };
+                    let new = (*self.value + step).clamp(self.min, self.max);
+                    if new != *self.value {
+                        *self.value = new;
+                        changed = true;
+                    }
+                }
+            }
 
             // Interaction first so the paint reflects this frame's value.
             if resp.double_clicked() {
@@ -187,7 +170,6 @@ impl Adjustment<'_> {
             );
 
             // Mono value readout; click to edit, arrows step while editing.
-            let edit_id = ui.id().with(("adjust-edit", self.label));
             let focus_id = ui.id().with(("adjust-edit-focus", self.label));
             let editing: Option<String> =
                 ui.memory(|m| m.data.get_temp(edit_id));
@@ -268,9 +250,49 @@ impl Adjustment<'_> {
                     });
                 }
             }
-        }
+        });
         changed
     }
+}
+
+/// Small chevron for collapsing a panel; points down while the thing it
+/// controls is showing. Drawn with strokes rather than typed as a glyph:
+/// egui's bundled fonts have no caret we have verified coverage for, and an
+/// unlucky one renders as tofu.
+pub fn caret(ui: &mut egui::Ui, pointing_down: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(26.0, 20.0), Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(theme::RADIUS_SM),
+            theme::bg_raised(),
+        );
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let color = if resp.hovered() {
+        theme::text_primary()
+    } else {
+        theme::text_muted()
+    };
+    let c = rect.center();
+    let (half_w, half_h) = (5.0, 2.8);
+    let (left, tip, right) = if pointing_down {
+        (
+            Pos2::new(c.x - half_w, c.y - half_h),
+            Pos2::new(c.x, c.y + half_h),
+            Pos2::new(c.x + half_w, c.y - half_h),
+        )
+    } else {
+        (
+            Pos2::new(c.x - half_w, c.y + half_h),
+            Pos2::new(c.x, c.y - half_h),
+            Pos2::new(c.x + half_w, c.y + half_h),
+        )
+    };
+    let stroke = Stroke::new(1.6, color);
+    ui.painter().line_segment([left, tip], stroke);
+    ui.painter().line_segment([tip, right], stroke);
+    resp
 }
 
 /// Segmented control; returns true when the selection changed.
@@ -398,62 +420,159 @@ mod tests {
 
     fn adjustment<'a>(value: &'a mut f32, min: f32, max: f32, log: bool) -> Adjustment<'a> {
         Adjustment {
-            label: "Zoom",
+            label: "Temp",
             value,
             min,
             max,
-            default: 100.0,
+            default: 0.0,
             bipolar: false,
             decimals: 0,
             logarithmic: log,
-            step: 10.0,
-            suffix: "%",
-            width: Some(160.0),
+            step: 50.0,
         }
     }
 
     #[test]
     fn log_track_position_round_trips() {
-        // The zoom slider's range. A drag reads the handle position back out
-        // of `from_t`, so a mapping that is not its own inverse makes the
-        // handle jump away from the pointer.
-        let mut v = 100.0;
-        let adj = adjustment(&mut v, 5.0, 1600.0, true);
-        for value in [5.0, 25.0, 100.0, 400.0, 1600.0] {
+        // The white-balance slider's Kelvin range. A drag reads the handle
+        // position back out of `from_t`, so a mapping that is not its own
+        // inverse makes the handle jump away from the pointer.
+        let mut v = 6500.0;
+        let adj = adjustment(&mut v, 2000.0, 50000.0, true);
+        for value in [2000.0, 3200.0, 6500.0, 20000.0, 50000.0] {
             let t = adj.to_t(value);
-            assert!((0.0..=1.0).contains(&t), "{value}% mapped outside the track");
+            assert!((0.0..=1.0).contains(&t), "{value} mapped outside the track");
             assert!(
                 (adj.from_t(t) - value).abs() < value * 0.001,
-                "{value}% round-tripped to {}",
+                "{value} round-tripped to {}",
                 adj.from_t(t)
             );
         }
     }
 
     #[test]
-    fn log_track_gives_fit_range_real_estate() {
-        // The point of the log scale: 100% sits near the middle rather than
-        // being crushed into the first few pixels as it would linearly.
-        let mut v = 100.0;
-        let adj = adjustment(&mut v, 5.0, 1600.0, true);
-        let t = adj.to_t(100.0);
-        assert!((0.4..0.6).contains(&t), "1:1 sits at {t} along the track");
-        // Everything below 1:1 still gets a usable share of it.
-        assert!(adj.to_t(25.0) > 0.2, "25% is crushed against the left end");
-    }
-
-    #[test]
-    fn readout_carries_its_unit() {
-        let mut v = 28.4;
-        let adj = adjustment(&mut v, 5.0, 1600.0, true);
-        assert_eq!(adj.format(), "28%");
+    fn log_track_spreads_the_low_end_out() {
+        // The point of the log scale: daylight sits near the middle instead
+        // of being crushed into the first few pixels as it would linearly.
+        let mut v = 6500.0;
+        let adj = adjustment(&mut v, 2000.0, 50000.0, true);
+        assert!((0.3..0.5).contains(&adj.to_t(6500.0)));
+        assert!(adj.to_t(3200.0) > 0.1, "tungsten is crushed against the left end");
     }
 
     #[test]
     fn out_of_range_values_stay_on_the_track() {
-        let mut v = 100.0;
-        let adj = adjustment(&mut v, 5.0, 1600.0, true);
+        let mut v = 6500.0;
+        let adj = adjustment(&mut v, 2000.0, 50000.0, true);
         assert_eq!(adj.to_t(1.0), 0.0);
-        assert_eq!(adj.to_t(99_999.0), 1.0);
+        assert_eq!(adj.to_t(99_999_999.0), 1.0);
+    }
+
+    /// Run `Adjustment` through a headless egui context so the hover /
+    /// arrow-key wiring is exercised for real, not just its arithmetic.
+    fn drive(events_per_frame: Vec<Vec<egui::Event>>, value: &mut f32) -> bool {
+        let ctx = egui::Context::default();
+        let mut changed = false;
+        for events in events_per_frame {
+            let input = egui::RawInput {
+                events,
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 200.0),
+                )),
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(input, |ui| {
+                changed = Adjustment {
+                    label: "Exposure",
+                    value,
+                    min: -5.0,
+                    max: 5.0,
+                    default: 0.0,
+                    bipolar: true,
+                    decimals: 2,
+                    logarithmic: false,
+                    step: 0.1,
+                }
+                .show(ui);
+            });
+        }
+        changed
+    }
+
+    fn key(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }
+    }
+
+    /// Somewhere along the track: past the label column, short of the readout.
+    const OVER_TRACK: egui::Pos2 = egui::Pos2::new(200.0, 10.0);
+    const OFF_WIDGET: egui::Pos2 = egui::Pos2::new(200.0, 190.0);
+
+    #[test]
+    fn arrows_step_the_value_while_the_track_is_hovered() {
+        let mut v = 0.0;
+        // Frame one parks the pointer, frame two presses Up.
+        let changed = drive(
+            vec![
+                vec![egui::Event::PointerMoved(OVER_TRACK)],
+                vec![key(egui::Key::ArrowUp)],
+            ],
+            &mut v,
+        );
+        assert!(changed, "hovering the track and pressing Up did nothing");
+        assert!((v - 0.1).abs() < 1e-5, "expected one +0.1 step, got {v}");
+
+        drive(
+            vec![
+                vec![egui::Event::PointerMoved(OVER_TRACK)],
+                vec![key(egui::Key::ArrowDown)],
+                vec![key(egui::Key::ArrowDown)],
+            ],
+            &mut v,
+        );
+        assert!((v - -0.1).abs() < 1e-5, "expected two -0.1 steps, got {v}");
+    }
+
+    #[test]
+    fn arrows_do_nothing_with_the_pointer_elsewhere() {
+        let mut v = 0.0;
+        let changed = drive(
+            vec![
+                vec![egui::Event::PointerMoved(OFF_WIDGET)],
+                vec![key(egui::Key::ArrowUp)],
+            ],
+            &mut v,
+        );
+        assert!(!changed && v == 0.0, "stepped a slider that was not hovered");
+    }
+
+    #[test]
+    fn hover_stepping_respects_the_range() {
+        let mut v = 4.95;
+        drive(
+            vec![
+                vec![egui::Event::PointerMoved(OVER_TRACK)],
+                vec![key(egui::Key::ArrowUp)],
+                vec![key(egui::Key::ArrowUp)],
+            ],
+            &mut v,
+        );
+        assert_eq!(v, 5.0, "walked past the maximum");
+    }
+
+    #[test]
+    fn linear_track_maps_both_ends_and_the_middle() {
+        let mut v = 0.0;
+        let adj = adjustment(&mut v, -100.0, 100.0, false);
+        assert_eq!(adj.to_t(-100.0), 0.0);
+        assert_eq!(adj.to_t(100.0), 1.0);
+        assert!((adj.to_t(0.0) - 0.5).abs() < 1e-6);
+        assert!((adj.from_t(0.5) - 0.0).abs() < 1e-4);
     }
 }
