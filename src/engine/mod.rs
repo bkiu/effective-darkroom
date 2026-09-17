@@ -14,6 +14,7 @@ pub mod color;
 pub mod crop;
 pub mod straighten;
 pub mod curve;
+pub mod exif_out;
 pub mod export;
 pub mod params;
 

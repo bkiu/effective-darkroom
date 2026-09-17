@@ -38,7 +38,9 @@ changes run `cargo build --release` or the launcher serves a stale binary.
   `register_native_texture`; a 256px pass is read back async for the histogram.
   The tone LUT composes: per-camera base curve (RAW only, `assets/base_curves/`)
   ∘ parametric sliders ∘ user point curves (Fritsch–Carlson monotone cubic).
-  Export (`engine/export.rs`) renders full-res through this same pipeline.
+  Export (`engine/export.rs`) renders full-res through this same pipeline;
+  `engine/exif_out.rs` rebuilds an Exif APP1 for the encoded JPEG (source
+  Exif verbatim for JPEGs, rawler's parse for RAWs, maker notes dropped).
 - `src/importer/` — background import (files/folders or camera via libgphoto2),
   capture-date `YYYY/MM-DD` sorting, name+size dedupe, scan/picker streaming,
   cancel flag. Camera imports never delete from the card.

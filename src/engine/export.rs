@@ -9,6 +9,7 @@ use chrono::{Local, TimeZone};
 use crate::catalog::{Catalog, FileKind, ImageRecord};
 use crate::decode::full::{self, FullPixels};
 use crate::engine::curve::BaseCurve;
+use crate::engine::exif_out;
 use crate::engine::params::EditParams;
 use crate::engine::{RenderEngine, SourcePixels};
 
@@ -148,16 +149,27 @@ fn export_one(
     };
 
     let out_path = unique_path(&spec.dest, &spec.file_name(rec));
-    let file = std::fs::File::create(&out_path).context("create output file")?;
-    let mut writer = std::io::BufWriter::new(file);
-    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
-        &mut writer,
-        spec.quality.clamp(1, 100),
-    );
     let rgb = image::DynamicImage::ImageRgba8(final_img).to_rgb8();
-    encoder
-        .encode(rgb.as_raw(), rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)
-        .context("encode jpeg")?;
+    let (out_w, out_h) = (rgb.width(), rgb.height());
+
+    // Encode to memory so the Exif segment can be spliced in ahead of the
+    // scan data; the encoder itself writes no metadata.
+    let mut jpeg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(
+        &mut std::io::Cursor::new(&mut jpeg),
+        spec.quality.clamp(1, 100),
+    )
+    .encode(rgb.as_raw(), out_w, out_h, image::ExtendedColorType::Rgb8)
+    .context("encode jpeg")?;
+
+    let fields = exif_out::build(rec, out_w, out_h);
+    match exif_out::insert(&jpeg, &fields) {
+        Ok(with_exif) => jpeg = with_exif,
+        // A photo without its metadata still beats no photo at all.
+        Err(e) => tracing::warn!("{}: exif not written: {e:#}", rec.file_name),
+    }
+
+    std::fs::write(&out_path, &jpeg).context("write output file")?;
     Ok(())
 }
 

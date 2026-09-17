@@ -50,7 +50,9 @@ release binary.
 - **Export**: Lightroom-style dialog — JPEG (through the develop pipeline)
   or DNG — either a lossless conversion of the untouched raw data or
   a linear DNG with the develop edits baked into 16-bit pixels (EXIF
-  carried over); base location (Pictures / Documents /
+  carried over). Exported JPEGs keep the original capture time, camera,
+  lens and exposure metadata, with orientation and dimensions corrected to
+  match the pixels actually written; base location (Pictures / Documents /
   Nextcloud / custom) with optional subfolder, JPEG quality, long-edge
   resize (default 3000 px), filename prefix, original or `YYYYMMDD_HHMMSS`
   naming. Batch-exports the selection through the exact same GPU pipeline
