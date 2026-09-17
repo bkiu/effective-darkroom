@@ -208,6 +208,8 @@ pub struct App {
     /// Toolbar contents and filmstrip hidden in the single-image views
     /// (F6, or the caret at the right of the bar).
     strip_collapsed: bool,
+    /// Full-screen slideshow (F): the photo on black, no chrome.
+    slideshow: crate::ui::slideshow::SlideshowState,
     latest_zoom: f32,
     decode_generation: u64,
     /// Latest rendered output for the loupe.
@@ -316,6 +318,7 @@ impl App {
             settings: Default::default(),
             show_info: config.show_info_overlay.unwrap_or(false),
             strip_collapsed: config.filmstrip_collapsed.unwrap_or(false),
+            slideshow: Default::default(),
             crop_ui: develop_panel::CropUiState {
                 // ED_STARTUP_CROP=1: open with the crop tool active (dev hook)
                 tool_active: std::env::var("ED_STARTUP_CROP").is_ok(),
@@ -694,6 +697,12 @@ impl App {
         if self.delete.open {
             return;
         }
+        // So does the slideshow: with no chrome on screen there is nothing to
+        // show what a key did, so only the few that are self-evident act.
+        if self.slideshow.active {
+            self.handle_slideshow_keys(ctx);
+            return;
+        }
         let ctrl = ctx.input(|i| i.modifiers.command);
         if ctrl {
             // Ctrl+A selects everything the current filters leave on screen.
@@ -768,6 +777,9 @@ impl App {
             self.view = View::Develop;
             self.ensure_current_from_selection();
         }
+        if ctx.input(|i| i.key_pressed(egui::Key::F)) {
+            self.enter_slideshow(ctx);
+        }
 
         // Loupe/develop view controls: filmstrip and zoom.
         let (key_f6, key_z, key_zero, key_in, key_out) = ctx.input(|i| {
@@ -809,6 +821,65 @@ impl App {
         self.config.save();
         // Re-expanding should land back on the photo being viewed.
         self.strip_scroll_pending = !self.strip_collapsed;
+    }
+
+    /// Take over the screen with the current photo. The view underneath is
+    /// left as it was, so leaving drops straight back into it.
+    fn enter_slideshow(&mut self, ctx: &egui::Context) {
+        self.ensure_current_from_selection();
+        if self.current.is_none() {
+            // Nothing to show; a black screen with no way out but Esc would
+            // just look like a crash.
+            return;
+        }
+        self.slideshow.enter();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+    }
+
+    fn leave_slideshow(&mut self, ctx: &egui::Context) {
+        self.slideshow.leave();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+    }
+
+    /// The slideshow's whole keyboard: move, and get out.
+    fn handle_slideshow_keys(&mut self, ctx: &egui::Context) {
+        let (escape, key_f, left, right, space, scroll) = ctx.input(|i| {
+            (
+                i.key_pressed(egui::Key::Escape),
+                i.key_pressed(egui::Key::F),
+                i.key_pressed(egui::Key::ArrowLeft),
+                i.key_pressed(egui::Key::ArrowRight),
+                i.key_pressed(egui::Key::Space),
+                i.smooth_scroll_delta.y,
+            )
+        });
+        if escape || key_f {
+            self.leave_slideshow(ctx);
+            return;
+        }
+        let mut step = self.slideshow.wheel_step(scroll);
+        if left {
+            step -= 1;
+        }
+        if right || space {
+            step += 1;
+        }
+        if step != 0 {
+            self.step_current(step);
+        }
+    }
+
+    fn show_slideshow(&mut self, ui: &mut egui::Ui) {
+        self.maybe_render();
+        let loading = self.current.as_ref().is_some_and(|c| c.loading);
+        let rendered = self.rendered;
+        let state = &self.slideshow;
+        egui::CentralPanel::no_frame().show(ui, |ui| {
+            crate::ui::slideshow::show(ui, rendered, loading, state);
+        });
+        if self.slideshow.hint_visible() {
+            ui.ctx().request_repaint();
+        }
     }
 
     /// Entering loupe/develop with no current image: use the grid selection
@@ -1280,13 +1351,17 @@ impl App {
 
     /// Slim bar above the filmstrip in the single-image views: flag buttons
     /// (current state highlighted) and delete, with a caret on the right that
-    /// collapses both this bar's contents and the filmstrip. The caret is
-    /// drawn whatever else is going on, so a collapsed strip is always
-    /// recoverable without the keyboard.
+    /// collapses both this bar's contents and the filmstrip.
+    ///
+    /// Collapsed, the bar is not drawn at all — every point of height goes to
+    /// the photo — and `show_strip_caret` floats the way back over it.
     ///
     /// Zoom lives on the wheel and the keyboard (Z, 0, +/-) rather than here;
     /// a second row of controls cost more of the photo than it was worth.
     fn show_loupe_toolbar(&mut self, ui: &mut egui::Ui) {
+        if self.strip_collapsed {
+            return;
+        }
         let cur_id = self.current.as_ref().map(|c| c.id);
         let flag = cur_id
             .and_then(|id| self.images.iter().find(|r| r.id == id))
@@ -1296,7 +1371,6 @@ impl App {
         let mut set: Option<Flag> = None;
         let mut delete = false;
         let mut toggle_strip = false;
-        let collapsed = self.strip_collapsed;
         egui::Panel::bottom("loupe_toolbar").show(ui, |ui| {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -1305,12 +1379,8 @@ impl App {
                 // two draw on top of each other.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_space(10.0);
-                    if crate::ui::widgets::caret(ui, !collapsed)
-                        .on_hover_text(if collapsed {
-                            "Show the toolbar and filmstrip (F6)"
-                        } else {
-                            "Hide the toolbar and filmstrip (F6)"
-                        })
+                    if crate::ui::widgets::caret(ui, true)
+                        .on_hover_text("Hide the toolbar and filmstrip (F6)")
                         .clicked()
                     {
                         toggle_strip = true;
@@ -1319,7 +1389,7 @@ impl App {
                         egui::Layout::left_to_right(egui::Align::Center),
                         |ui| {
                             ui.add_space(10.0);
-                            if collapsed || cur_id.is_none() {
+                            if cur_id.is_none() {
                                 return;
                             }
                             for (label, value, hover) in [
@@ -1367,6 +1437,30 @@ impl App {
             }
         }
         if toggle_strip {
+            self.toggle_filmstrip();
+        }
+    }
+
+    /// The way back from a collapsed toolbar: a caret floating in the bottom
+    /// right of the photo, in the corner the bar's own caret occupied. It
+    /// lives in its own foreground area so it stays clickable over the
+    /// loupe's full-rect drag handling.
+    fn show_strip_caret(&mut self, ui: &egui::Ui, image_rect: egui::Rect) {
+        if !self.strip_collapsed {
+            return;
+        }
+        let margin = egui::vec2(14.0, 14.0);
+        let size = egui::vec2(34.0, 26.0);
+        let clicked = egui::Area::new(egui::Id::new("strip_caret"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(image_rect.max - size - margin)
+            .show(ui.ctx(), |ui| {
+                crate::ui::widgets::floating_caret(ui, false)
+                    .on_hover_text("Show the toolbar and filmstrip (F6)")
+                    .clicked()
+            })
+            .inner;
+        if clicked {
             self.toggle_filmstrip();
         }
     }
@@ -1422,6 +1516,13 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         self.drain_results(&ctx);
         self.handle_keys(&ctx);
+
+        if self.slideshow.active {
+            // No top bar, no panels, no dialogs: just the photo.
+            self.show_slideshow(ui);
+            self.latest_zoom = ctx.zoom_factor();
+            return;
+        }
 
         if self.library_prompt_open {
             egui::Window::new("Welcome to Effective Darkroom")
@@ -1716,6 +1817,7 @@ impl eframe::App for App {
                             let loading =
                                 self.current.as_ref().is_some_and(|c| c.loading);
                             let info = self.info_lines();
+                            let image_rect = ui.available_rect_before_wrap();
                             loupe::show(
                                 ui,
                                 &mut self.loupe,
@@ -1725,6 +1827,7 @@ impl eframe::App for App {
                                 None,
                                 false,
                             );
+                            self.show_strip_caret(ui, image_rect);
                         }
                     }
                 });
@@ -1806,6 +1909,7 @@ impl eframe::App for App {
                     let info = self.info_lines();
                     let aspect = self.crop_ui.aspect;
                     let tool_active = self.crop_ui.tool_active;
+                    let image_rect = ui.available_rect_before_wrap();
                     let mut edit_storage = None;
                     if tool_active {
                         if let Some(cur) = &mut self.current {
@@ -1848,6 +1952,7 @@ impl eframe::App for App {
                             cur.dirty_since = Some(Instant::now());
                         }
                     }
+                    self.show_strip_caret(ui, image_rect);
                 });
             }
         }

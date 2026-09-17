@@ -27,7 +27,8 @@ release binary.
   the library should live and uses it as the default destination.
 - **Library**: thumbnail grid with multi-selection, loupe with continuous
   wheel zoom and panning, filmstrip and a flag/delete toolbar in the
-  single-image views (both collapsible behind one caret), EXIF info overlay
+  single-image views (both collapsible behind one caret), a full-screen
+  slideshow on black for flicking through a shoot (`F`), EXIF info overlay
   (shutter, aperture, ISO, focal length, …).
 - **Collections & flags**: All Photos, a Last Import view holding whatever
   the most recent import run brought in, and named collections, all in the
@@ -73,6 +74,7 @@ release binary.
 | `I` | EXIF info overlay |
 | `Delete` | Remove from library / move to trash |
 | `Ctrl` `A` | Select every photo in the current view |
+| `F` | Full-screen slideshow (`Esc` or `F` leaves) |
 | `F6` | Show / hide the toolbar and filmstrip |
 | `Z` | Photo zoom: toggle fit and 1:1 (double-click does the same) |
 | `+` / `-` / `0` | Photo zoom in / out / fit |
@@ -84,8 +86,12 @@ files to the trash, and `Esc` cancels.
 
 In the loupe and develop views the mouse wheel zooms the photo around the
 pointer, and dragging pans once it no longer fits the window. The caret at
-the right of the toolbar folds the toolbar and filmstrip away to give the
-photo the whole panel.
+the right of the toolbar folds the toolbar and filmstrip away entirely; a
+small caret then floats in the bottom right of the photo to bring them back.
+
+`F` throws the current photo full-screen on black with no chrome at all —
+scroll, `←`/`→` or `Space` moves through the library, `Esc` or `F` comes
+back to where you were.
 
 ## Storage
 

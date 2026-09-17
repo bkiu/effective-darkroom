@@ -8,6 +8,7 @@ pub mod grid;
 pub mod import_dialog;
 pub mod loupe;
 pub mod settings_dialog;
+pub mod slideshow;
 pub mod theme;
 pub mod widgets;
 pub mod tone_curve;

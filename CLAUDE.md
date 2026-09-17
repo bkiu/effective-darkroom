@@ -46,8 +46,10 @@ changes run `cargo build --release` or the launcher serves a stale binary.
   cancel flag. Camera imports never delete from the card.
 - `src/jobs/` — worker threads + crossbeam channels; workers clone the
   `egui::Context` and `request_repaint()`. Decode thread is latest-wins.
-- `src/ui/` — one module per surface (grid, loupe, filmstrip, develop panel,
-  tone curve, dialogs, top bar). `src/app.rs` owns all state; `visible` is the
+- `src/ui/` — one module per surface (grid, loupe, filmstrip, slideshow,
+  develop panel, tone curve, dialogs, top bar). The slideshow is a
+  full-screen mode (F) that replaces the whole frame — `App::ui` returns
+  early, so no top bar, panels or dialogs are drawn. `src/app.rs` owns all state; `visible` is the
   filtered image list that grid/filmstrip/arrows navigate, derived from the
   active `LibrarySource` (All / LastImport / Collection) plus the flag
   filters. Last Import reads `images.import_batch`, stamped once per import

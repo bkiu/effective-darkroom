@@ -274,6 +274,29 @@ pub fn caret(ui: &mut egui::Ui, pointing_down: bool) -> egui::Response {
     } else {
         theme::text_muted()
     };
+    chevron(ui.painter(), rect, pointing_down, color);
+    resp
+}
+
+/// The same chevron, but floating over the photo. Once the toolbar is
+/// collapsed there is no bar left to sit in, so this one brings its own
+/// scrim: it has to stay findable over a blown highlight as well as over a
+/// black frame.
+pub fn floating_caret(ui: &mut egui::Ui, pointing_down: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(34.0, 26.0), Sense::click());
+    let (bg, color) = if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        (Color32::from_black_alpha(190), Color32::WHITE)
+    } else {
+        (Color32::from_black_alpha(105), Color32::from_white_alpha(165))
+    };
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(theme::RADIUS_SM), bg);
+    chevron(ui.painter(), rect, pointing_down, color);
+    resp
+}
+
+fn chevron(painter: &egui::Painter, rect: Rect, pointing_down: bool, color: Color32) {
     let c = rect.center();
     let (half_w, half_h) = (5.0, 2.8);
     let (left, tip, right) = if pointing_down {
@@ -290,9 +313,8 @@ pub fn caret(ui: &mut egui::Ui, pointing_down: bool) -> egui::Response {
         )
     };
     let stroke = Stroke::new(1.6, color);
-    ui.painter().line_segment([left, tip], stroke);
-    ui.painter().line_segment([tip, right], stroke);
-    resp
+    painter.line_segment([left, tip], stroke);
+    painter.line_segment([tip, right], stroke);
 }
 
 /// Segmented control; returns true when the selection changed.
