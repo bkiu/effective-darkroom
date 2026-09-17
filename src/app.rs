@@ -35,6 +35,9 @@ pub enum LibraryMode {
 
 const SAVE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(500);
 
+/// Zoom ratio per +/- keypress or toolbar zoom-button click.
+const ZOOM_STEP: f32 = 1.5;
+
 /// Small persisted app config (not part of the catalog).
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -47,6 +50,8 @@ pub struct AppConfig {
     pub export: Option<crate::ui::export_dialog::ExportPrefs>,
     /// Show the EXIF info overlay in the loupe (toggled with I).
     pub show_info_overlay: Option<bool>,
+    /// Collapse the filmstrip in the single-image views (toggled with F6).
+    pub filmstrip_collapsed: Option<bool>,
     /// Custom catalog directory (Settings -> Move catalog). Also read
     /// directly by catalog::data_dir() for background workers.
     pub catalog_dir: Option<PathBuf>,
@@ -181,6 +186,8 @@ pub struct App {
     crop_ui: develop_panel::CropUiState,
     /// Scroll the filmstrip to the current photo on the next frame.
     strip_scroll_pending: bool,
+    /// Filmstrip hidden in the single-image views (F6 / the toolbar toggle).
+    strip_collapsed: bool,
     latest_zoom: f32,
     decode_generation: u64,
     /// Latest rendered output for the loupe.
@@ -287,6 +294,7 @@ impl App {
             delete: DeleteDialog::default(),
             settings: Default::default(),
             show_info: config.show_info_overlay.unwrap_or(false),
+            strip_collapsed: config.filmstrip_collapsed.unwrap_or(false),
             crop_ui: develop_panel::CropUiState {
                 // ED_STARTUP_CROP=1: open with the crop tool active (dev hook)
                 tool_active: std::env::var("ED_STARTUP_CROP").is_ok(),
@@ -656,6 +664,16 @@ impl App {
         if ctx.egui_wants_keyboard_input() {
             return;
         }
+        let ctrl = ctx.input(|i| i.modifiers.command);
+        if ctrl {
+            // Ctrl+A selects everything the current filters leave on screen.
+            if ctx.input(|i| i.key_pressed(egui::Key::A)) {
+                self.select_all_visible();
+            }
+            // Other shortcuts are unmodified; Ctrl+= / Ctrl+- belong to
+            // eframe's whole-UI zoom.
+            return;
+        }
         let (left, right, key_g, key_e, key_d, key_del, key_i) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::ArrowLeft),
@@ -720,6 +738,47 @@ impl App {
             self.view = View::Develop;
             self.ensure_current_from_selection();
         }
+
+        // Loupe/develop view controls: filmstrip and zoom.
+        let (key_f6, key_z, key_zero, key_in, key_out) = ctx.input(|i| {
+            (
+                i.key_pressed(egui::Key::F6),
+                i.key_pressed(egui::Key::Z),
+                i.key_pressed(egui::Key::Num0),
+                i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals),
+                i.key_pressed(egui::Key::Minus),
+            )
+        });
+        if key_f6 {
+            self.toggle_filmstrip();
+        }
+        if key_z {
+            self.loupe.toggle_one_to_one(ctx.pointer_latest_pos());
+        }
+        if key_zero {
+            self.loupe.reset_view();
+        }
+        if key_in {
+            self.loupe.zoom_by(ZOOM_STEP);
+        }
+        if key_out {
+            self.loupe.zoom_by(1.0 / ZOOM_STEP);
+        }
+    }
+
+    /// Select every photo in the current filtered view.
+    fn select_all_visible(&mut self) {
+        self.ensure_visible();
+        self.grid.selection = self.visible.iter().map(|r| r.id).collect();
+        self.grid.anchor = None;
+    }
+
+    fn toggle_filmstrip(&mut self) {
+        self.strip_collapsed = !self.strip_collapsed;
+        self.config.filmstrip_collapsed = Some(self.strip_collapsed);
+        self.config.save();
+        // Re-expanding should land back on the photo being viewed.
+        self.strip_scroll_pending = !self.strip_collapsed;
     }
 
     /// Entering loupe/develop with no current image: use the grid selection
@@ -1164,47 +1223,110 @@ impl App {
     }
 
     /// Toolbar above the filmstrip in the single-image views: flag buttons
-    /// (current state highlighted) and delete.
+    /// (current state highlighted), delete, the zoom controls, and the
+    /// filmstrip toggle. The toggle is drawn even with no photo loaded, so a
+    /// collapsed filmstrip is always recoverable without the keyboard.
     fn show_loupe_toolbar(&mut self, ui: &mut egui::Ui) {
-        let Some(cur_id) = self.current.as_ref().map(|c| c.id) else {
-            return;
-        };
-        let flag = self
-            .images
-            .iter()
-            .find(|r| r.id == cur_id)
+        let cur_id = self.current.as_ref().map(|c| c.id);
+        let flag = cur_id
+            .and_then(|id| self.images.iter().find(|r| r.id == id))
             .map(|r| r.flag)
             .unwrap_or_default();
+        let has_image = self.rendered.is_some();
 
         let mut set: Option<Flag> = None;
         let mut delete = false;
+        let mut toggle_strip = false;
+        let loupe = &mut self.loupe;
+        let strip_collapsed = self.strip_collapsed;
         egui::Panel::bottom("loupe_toolbar").show(ui, |ui| {
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.add_space(14.0);
-                for (label, value, hover) in [
-                    ("⚑ Pick", Flag::Pick, "Flag as pick (P)"),
-                    ("⚐ Unflag", Flag::Unflagged, "Remove flag (U)"),
-                    ("✖ Reject", Flag::Reject, "Flag as reject (X)"),
-                ] {
-                    let active = flag == value;
-                    if crate::ui::theme::toggle_button(ui, active, label)
-                        .on_hover_text(hover)
-                        .clicked()
-                        && !active
-                    {
-                        set = Some(value);
+            // Wrapped rather than a left group plus a right-aligned one: with
+            // the develop panel open the two groups do not both fit, and a
+            // right-aligned group happily draws on top of the left one.
+            ui.horizontal_wrapped(|ui| {
+                ui.add_space(10.0);
+                if cur_id.is_some() {
+                    for (label, value, hover) in [
+                        ("⚑ Pick", Flag::Pick, "Flag as pick (P)"),
+                        ("⚐ Unflag", Flag::Unflagged, "Remove flag (U)"),
+                        ("✖ Reject", Flag::Reject, "Flag as reject (X)"),
+                    ] {
+                        let active = flag == value;
+                        if crate::ui::theme::toggle_button(ui, active, label)
+                            .on_hover_text(hover)
+                            .clicked()
+                            && !active
+                        {
+                            set = Some(value);
+                        }
                     }
+                    ui.separator();
+                    if ui
+                        .button(egui::RichText::new("🗑 Delete").color(
+                            egui::Color32::from_rgb(235, 130, 120),
+                        ))
+                        .on_hover_text("Delete this photo (Del)")
+                        .clicked()
+                    {
+                        delete = true;
+                    }
+                    ui.separator();
                 }
-                ui.separator();
-                if ui
-                    .button(egui::RichText::new("🗑 Delete").color(
-                        egui::Color32::from_rgb(235, 130, 120),
-                    ))
-                    .on_hover_text("Delete this photo (Del)")
+
+                if has_image {
+                    let fit = loupe.is_fit();
+                    if crate::ui::theme::toggle_button(ui, fit, "Fit")
+                        .on_hover_text("Fit the whole photo in the window (0)")
+                        .clicked()
+                        && !fit
+                    {
+                        loupe.reset_view();
+                    }
+                    let one_to_one = (loupe.zoom_percent() - 100.0).abs() < 0.5;
+                    if crate::ui::theme::toggle_button(ui, one_to_one, "1:1")
+                        .on_hover_text("Zoom to 100% (Z, or double-click the photo)")
+                        .clicked()
+                        && !one_to_one
+                    {
+                        loupe.set_zoom(1.0);
+                    }
+                    if ui
+                        .add_enabled(
+                            loupe.zoom_percent() > loupe::MIN_ZOOM * 100.0 + 0.5,
+                            egui::Button::new("-"),
+                        )
+                        .on_hover_text("Zoom out (-)")
+                        .clicked()
+                    {
+                        loupe.zoom_by(1.0 / ZOOM_STEP);
+                    }
+                    ui.add_sized(
+                        [44.0, ui.available_height()],
+                        egui::Label::new(
+                            egui::RichText::new(format!("{:.0}%", loupe.zoom_percent()))
+                                .monospace(),
+                        ),
+                    )
+                    .on_hover_text("Scroll the photo to zoom; drag to pan");
+                    if ui
+                        .add_enabled(
+                            loupe.zoom_percent() < loupe::MAX_ZOOM * 100.0 - 0.5,
+                            egui::Button::new("+"),
+                        )
+                        .on_hover_text("Zoom in (+)")
+                        .clicked()
+                    {
+                        loupe.zoom_by(ZOOM_STEP);
+                    }
+                    ui.separator();
+                }
+
+                if crate::ui::theme::toggle_button(ui, !strip_collapsed, "Filmstrip")
+                    .on_hover_text("Show or hide the thumbnail strip (F6)")
                     .clicked()
                 {
-                    delete = true;
+                    toggle_strip = true;
                 }
             });
             ui.add_space(4.0);
@@ -1214,17 +1336,25 @@ impl App {
             self.set_flag_selection(flag);
         }
         if delete {
-            let ids: Vec<i64> = if !self.grid.selection.is_empty() {
-                self.grid.selection.iter().copied().collect()
-            } else {
-                vec![cur_id]
-            };
-            self.delete.request(ids);
+            if let Some(cur_id) = cur_id {
+                let ids: Vec<i64> = if !self.grid.selection.is_empty() {
+                    self.grid.selection.iter().copied().collect()
+                } else {
+                    vec![cur_id]
+                };
+                self.delete.request(ids);
+            }
+        }
+        if toggle_strip {
+            self.toggle_filmstrip();
         }
     }
 
     /// Bottom filmstrip for the single-image views; switches images on click.
     fn show_filmstrip(&mut self, ui: &mut egui::Ui) {
+        if self.strip_collapsed {
+            return;
+        }
         self.ensure_visible();
         let mut clicked = None;
         egui::Panel::bottom("filmstrip")

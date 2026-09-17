@@ -49,8 +49,17 @@ pub fn show(
                         jobs.request_thumb(rec.clone());
                     }
 
+                    // The strip shows the same selection the grid does, so
+                    // a Ctrl+A here is visible before a flag or delete acts
+                    // on all of it.
+                    let selected = state.selection.contains(&rec.id);
                     let painter = ui.painter();
-                    painter.rect_filled(rect, 3.0, theme::bg_raised());
+                    let bg = if selected {
+                        theme::accent().gamma_multiply(0.16)
+                    } else {
+                        theme::bg_raised()
+                    };
+                    painter.rect_filled(rect, 3.0, bg);
                     if let Some(tex) = state.textures.get(&rec.id) {
                         let size = tex.size_vec2();
                         let scale =
@@ -63,11 +72,14 @@ pub fn show(
                             Color32::WHITE,
                         );
                     }
-                    if is_current {
+                    if is_current || selected {
                         painter.rect_stroke(
                             rect,
                             3.0,
-                            egui::Stroke::new(2.0, theme::accent()),
+                            egui::Stroke::new(
+                                if is_current { 2.0 } else { 1.0 },
+                                theme::accent(),
+                            ),
                             egui::StrokeKind::Inside,
                         );
                     }

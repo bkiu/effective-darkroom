@@ -58,22 +58,39 @@ changes run `cargo build --release` or the launcher serves a stale binary.
 - `import_cli` / `export_cli` / `camera_cli` — headless import/export/camera
   smoke tests. Use `XDG_DATA_HOME=<scratch>` to isolate a test catalog.
 - `probe` (in libraw-ffi) — LibRaw metadata/thumb/decode check.
-- `repaint_test`, `wgpu_alloc_test` — repros for the machine quirks below.
+- `repaint_test`, `repaint_mode_test`, `wgpu_alloc_test` — repros for the
+  machine quirks below.
 
-Dev hooks: `ED_STARTUP_VIEW=develop`, `ED_STARTUP_IMAGE=<substring>`.
+Dev hooks: `ED_STARTUP_VIEW=develop`, `ED_STARTUP_IMAGE=<substring>`,
+`ED_STARTUP_CROP=1`, `ED_TITLE=<caption>`.
 
 ## Machine quirks (this workstation)
 
-- wgpu's automatic backend selection stalls the winit event loop after one
-  frame on KDE Wayland → backends pinned to VULKAN|GL in `main.rs`.
-- The NVIDIA (3090 Ti) Vulkan driver fails ~100MB texture allocations with
-  spurious OOM → adapter defaults to LowPower (AMD iGPU). Override with
-  `WGPU_POWER_PREF=high`; retest after driver updates.
+- winit 0.30's Wayland backend paints one frame on this KDE session and then
+  spins the main thread at 100% CPU in `wayland_backend`'s `prepare_read`,
+  never redrawing → `prefer_x11()` in `main.rs` hides `WAYLAND_DISPLAY` so
+  winit takes the XWayland path (winit 0.29 removed `WINIT_UNIX_BACKEND`, so
+  the environment is the only lever). `ED_WAYLAND=1` forces native Wayland.
+  Reproduces with a bare eframe app on every adapter, llvmpipe included —
+  `examples/repaint_mode_test` bisects backend / present mode / adapter.
+  Retest after a winit or KWin update.
+- Backends are pinned to VULKAN|GL in `main.rs`; GL alone cannot present here
+  (`incompatible_surface_backends: GL`), so this is Vulkan in practice.
+- The discrete GPU is now the default (`select_adapter` in `main.rs`, surface
+  compatibility first, then the preferred device class). The old LowPower
+  default existed because a 3090 Ti failed ~100MB texture allocations with
+  spurious OOM; the card is now a 3060 that passes `wgpu_alloc_test`, while
+  the AMD iGPU's dmabufs are rejected by the compositor ("importing the
+  supplied dmabufs failed", which kills the Wayland connection) — so the
+  preference flipped. `WGPU_POWER_PREF=low` picks the iGPU again.
 - egui embeds its fonts. Inter is bundled as primary; before using a non-ASCII
   glyph in UI strings check coverage (past tofu bug) — ⚑⚐✖✔⚠🗑📷 are safe.
 - GUI verification: prefer `render_cli` headless renders. Screenshots require
   a KWin activate-by-caption script + `spectacle -a` and fail if the user is
-  actively typing elsewhere (focus-stealing prevention).
+  actively typing elsewhere (focus-stealing prevention). Synthetic keystrokes
+  are not available: `wtype` finds no virtual-keyboard protocol, and xdotool's
+  XTEST raises KDE's "Remote Control" consent dialog. Drive UI states through
+  the config file and `ED_STARTUP_*` hooks instead.
 
 ## Conventions
 
