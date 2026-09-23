@@ -402,10 +402,22 @@ impl App {
         } else {
             self.grid.selection.iter().copied().collect()
         };
+        self.set_flag(&ids, flag);
+    }
+
+    /// Flag only the photo on screen, whatever the grid selection is: in the
+    /// slideshow that photo is the only thing the user can see, so silently
+    /// flagging a set they cannot check would be a nasty surprise.
+    fn set_flag_current(&mut self, flag: Flag) {
+        let ids: Vec<i64> = self.current.as_ref().map(|c| c.id).into_iter().collect();
+        self.set_flag(&ids, flag);
+    }
+
+    fn set_flag(&mut self, ids: &[i64], flag: Flag) {
         if ids.is_empty() {
             return;
         }
-        if let Err(e) = self.catalog.set_flag(&ids, flag) {
+        if let Err(e) = self.catalog.set_flag(ids, flag) {
             tracing::error!("set flag: {e:#}");
             return;
         }
@@ -841,7 +853,7 @@ impl App {
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
     }
 
-    /// The slideshow's whole keyboard: move, and get out.
+    /// The slideshow's whole keyboard: move, flag, and get out.
     fn handle_slideshow_keys(&mut self, ctx: &egui::Context) {
         let (escape, key_f, left, right, space, scroll) = ctx.input(|i| {
             (
@@ -856,6 +868,27 @@ impl App {
         if escape || key_f {
             self.leave_slideshow(ctx);
             return;
+        }
+        let (key_p, key_u, key_x) = ctx.input(|i| {
+            (
+                i.key_pressed(egui::Key::P),
+                i.key_pressed(egui::Key::U),
+                i.key_pressed(egui::Key::X),
+            )
+        });
+        // If two land in the same frame the reject wins, matching the main
+        // views, where X is simply applied last.
+        let flag = key_x
+            .then_some(Flag::Reject)
+            .or(key_u.then_some(Flag::Unflagged))
+            .or(key_p.then_some(Flag::Pick));
+        if let Some(flag) = flag {
+            self.set_flag_current(flag);
+            // Only report what actually happened: with no photo up there is
+            // nothing to flag and the toast would be a lie.
+            if self.current.is_some() {
+                self.slideshow.flag_toast(flag);
+            }
         }
         let mut step = self.slideshow.wheel_step(scroll);
         if left {
@@ -877,7 +910,7 @@ impl App {
         egui::CentralPanel::no_frame().show(ui, |ui| {
             crate::ui::slideshow::show(ui, rendered, loading, state);
         });
-        if self.slideshow.hint_visible() {
+        if self.slideshow.overlay_visible() {
             ui.ctx().request_repaint();
         }
     }
