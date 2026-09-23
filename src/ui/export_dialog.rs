@@ -151,110 +151,109 @@ impl ExportDialog {
         let mut start = None;
         let mut open = self.open;
 
-        egui::Window::new("Export Photos")
+        crate::ui::dialog::window(ctx, "Export Photos")
             .open(&mut open)
-            .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.content_rect().center())
-            .collapsible(false)
             .resizable(false)
             .default_width(440.0)
             .show(ctx, |ui| {
-                if let Some((cur, total, name)) = &self.progress {
-                    let verb = match self.prefs.target {
-                        ExportTarget::Disk => "Exporting",
-                        ExportTarget::Immich => "Uploading",
-                    };
-                    ui.label(format!("{verb} {cur} of {total}…"));
-                    ui.add(
-                        egui::ProgressBar::new(*cur as f32 / (*total).max(1) as f32)
-                            .text(name.clone()),
-                    );
-                    return;
-                }
+                crate::ui::dialog::body(ui, |ui| {
+                    if let Some((cur, total, name)) = &self.progress {
+                        let verb = match self.prefs.target {
+                            ExportTarget::Disk => "Exporting",
+                            ExportTarget::Immich => "Uploading",
+                        };
+                        ui.label(format!("{verb} {cur} of {total}…"));
+                        ui.add(
+                            egui::ProgressBar::new(*cur as f32 / (*total).max(1) as f32)
+                                .text(name.clone()),
+                        );
+                        return;
+                    }
 
-                ui.add_space(4.0);
-                ui.label(format!(
-                    "{selected} image{} selected",
-                    if selected == 1 { "" } else { "s" }
-                ));
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    for (value, label) in [
-                        (ExportTarget::Disk, "Save to disk"),
-                        (ExportTarget::Immich, "Immich"),
-                    ] {
-                        let active = self.prefs.target == value;
-                        if crate::ui::theme::toggle_button(ui, active, label).clicked()
-                            && !active
-                        {
-                            self.prefs.target = value;
+                    ui.add_space(4.0);
+                    ui.label(format!(
+                        "{selected} image{} selected",
+                        if selected == 1 { "" } else { "s" }
+                    ));
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        for (value, label) in [
+                            (ExportTarget::Disk, "Save to disk"),
+                            (ExportTarget::Immich, "Immich"),
+                        ] {
+                            let active = self.prefs.target == value;
+                            if crate::ui::theme::toggle_button(ui, active, label).clicked()
+                                && !active
+                            {
+                                self.prefs.target = value;
+                            }
+                        }
+                    });
+                    ui.separator();
+                    ui.add_space(8.0);
+
+                    match self.prefs.target {
+                        ExportTarget::Disk => self.disk_tab(ui),
+                        ExportTarget::Immich => self.immich_tab(ui, immich_configured),
+                    }
+
+                    ui.add_space(12.0);
+                    ui.label(crate::ui::theme::overline_text("File Naming"));
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Prefix");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.prefs.prefix)
+                                .hint_text("optional")
+                                .desired_width(160.0),
+                        );
+                    });
+                    ui.add_space(2.0);
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut self.prefs.naming, Naming::Original, "Original name");
+                        ui.radio_value(&mut self.prefs.naming, Naming::DateTime, "YYYYMMDD_HHMMSS");
+                    });
+
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    if let Some(out) = &self.last_outcome {
+                        ui.label(format!("Exported {} images", out.exported));
+                        for err in &out.errors {
+                            ui.colored_label(egui::Color32::LIGHT_RED, err);
                         }
                     }
-                });
-                ui.separator();
-                ui.add_space(8.0);
 
-                match self.prefs.target {
-                    ExportTarget::Disk => self.disk_tab(ui),
-                    ExportTarget::Immich => self.immich_tab(ui, immich_configured),
-                }
-
-                ui.add_space(12.0);
-                ui.label(crate::ui::theme::overline_text("File Naming"));
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.label("Prefix");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.prefs.prefix)
-                            .hint_text("optional")
-                            .desired_width(160.0),
-                    );
-                });
-                ui.add_space(2.0);
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut self.prefs.naming, Naming::Original, "Original name");
-                    ui.radio_value(&mut self.prefs.naming, Naming::DateTime, "YYYYMMDD_HHMMSS");
-                });
-
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(6.0);
-                if let Some(out) = &self.last_outcome {
-                    ui.label(format!("Exported {} images", out.exported));
-                    for err in &out.errors {
-                        ui.colored_label(egui::Color32::LIGHT_RED, err);
-                    }
-                }
-
-                let ready = selected > 0
-                    && match self.prefs.target {
-                        ExportTarget::Disk => self.prefs.dest().is_some(),
-                        ExportTarget::Immich => {
-                            immich_configured
-                                && match self.prefs.immich_album_mode {
-                                    AlbumMode::NoAlbum => true,
-                                    AlbumMode::New => {
-                                        !self.prefs.immich_new_album.trim().is_empty()
+                    let ready = selected > 0
+                        && match self.prefs.target {
+                            ExportTarget::Disk => self.prefs.dest().is_some(),
+                            ExportTarget::Immich => {
+                                immich_configured
+                                    && match self.prefs.immich_album_mode {
+                                        AlbumMode::NoAlbum => true,
+                                        AlbumMode::New => {
+                                            !self.prefs.immich_new_album.trim().is_empty()
+                                        }
+                                        AlbumMode::Existing => {
+                                            self.prefs.immich_existing_album.is_some()
+                                        }
                                     }
-                                    AlbumMode::Existing => {
-                                        self.prefs.immich_existing_album.is_some()
-                                    }
-                                }
-                        }
+                            }
+                        };
+                    let label = match self.prefs.target {
+                        ExportTarget::Disk => "Export",
+                        ExportTarget::Immich => "Upload",
                     };
-                let label = match self.prefs.target {
-                    ExportTarget::Disk => "Export",
-                    ExportTarget::Immich => "Upload",
-                };
-                let export_clicked = if ready {
-                    crate::ui::theme::primary_button(ui, label).clicked()
-                } else {
-                    ui.add_enabled(false, egui::Button::new(label)).clicked()
-                };
-                if export_clicked {
-                    self.last_outcome = None;
-                    start = Some(self.build_request());
-                }
+                    let export_clicked = if ready {
+                        crate::ui::theme::primary_button(ui, label).clicked()
+                    } else {
+                        ui.add_enabled(false, egui::Button::new(label)).clicked()
+                    };
+                    if export_clicked {
+                        self.last_outcome = None;
+                        start = Some(self.build_request());
+                    }
+                })
             });
 
         self.open = open;
@@ -526,5 +525,38 @@ impl ExportDialog {
                 );
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn export_fits_on_a_short_screen() {
+        let mut dialog = ExportDialog {
+            open: true,
+            ..Default::default()
+        };
+        let shown = crate::ui::dialog::test_support::show_dialog(
+            1400.0,
+            420.0,
+            "Export Photos",
+            |ctx| {
+                dialog.show(ctx, 12, true);
+            },
+        );
+        let bounds = crate::ui::dialog::bounds(&shown.ctx);
+        assert!(
+            bounds.contains_rect(shown.window),
+            "export window {:?} escaped the frame {bounds:?}",
+            shown.window
+        );
+        assert!(
+            shown.screen.contains_rect(shown.painted),
+            "export painted {:?} off the bottom of a {:?} screen",
+            shown.painted,
+            shown.screen
+        );
     }
 }

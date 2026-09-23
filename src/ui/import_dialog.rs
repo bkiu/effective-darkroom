@@ -200,16 +200,19 @@ impl ImportDialog {
         let mut action = DialogAction::None;
         let mut open = self.open;
 
-        egui::Window::new("Import Photos")
+        crate::ui::dialog::window(ctx, "Import Photos")
             .open(&mut open)
-            .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.content_rect().center())
-            .collapsible(false)
             .resizable(true)
             .default_width(640.0)
             .default_height(560.0)
             .show(ctx, |ui| match self.stage {
-                Stage::Configure => self.configure_ui(ui, &mut action),
+                // Configure is a plain stack of settings, so it scrolls like
+                // the other dialogs. Pick already fills the window with its
+                // own scrolling thumbnail grid, and Importing is one progress
+                // bar — wrapping either would nest scroll areas.
+                Stage::Configure => {
+                    crate::ui::dialog::body(ui, |ui| self.configure_ui(ui, &mut action))
+                }
                 Stage::Pick => self.pick_ui(ui, &mut action),
                 Stage::Importing => self.importing_ui(ui),
             });
@@ -838,5 +841,34 @@ mod tests {
         assert_eq!((groups[0].start, groups[0].len), (0, 2));
         assert_eq!((groups[1].start, groups[1].len), (2, 1));
         assert_eq!(groups[2].label, "Date unknown");
+    }
+
+    /// Only the Configure stage scrolls; Pick brings its own scroll area.
+    #[test]
+    fn the_configure_stage_fits_on_a_short_screen() {
+        let mut dialog = ImportDialog {
+            open: true,
+            ..Default::default()
+        };
+        let shown = crate::ui::dialog::test_support::show_dialog(
+            1400.0,
+            380.0,
+            "Import Photos",
+            |ctx| {
+                dialog.show(ctx);
+            },
+        );
+        let bounds = crate::ui::dialog::bounds(&shown.ctx);
+        assert!(
+            bounds.contains_rect(shown.window),
+            "import window {:?} escaped the frame {bounds:?}",
+            shown.window
+        );
+        assert!(
+            shown.screen.contains_rect(shown.painted),
+            "import painted {:?} off the bottom of a {:?} screen",
+            shown.painted,
+            shown.screen
+        );
     }
 }
