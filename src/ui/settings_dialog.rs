@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::maintenance::MoveOutcome;
+use crate::metadata_transfer::{ApplyOptions, ImportPlan, OnConflict};
 
 #[derive(Default)]
 pub struct SettingsDialog {
@@ -24,6 +25,21 @@ pub struct SettingsDialog {
     /// Result of the last "Test connection": account name or error.
     pub immich_test: Option<Result<String, String>>,
     pub immich_testing: bool,
+    /// Outcome of the last metadata export/import, shown under the buttons.
+    pub metadata_message: Option<String>,
+    /// A bundle that has been read and measured, waiting for the user to
+    /// confirm what it should do.
+    pending_metadata: Option<PendingMetadata>,
+}
+
+/// A metadata file picked for import, with what applying it would do.
+struct PendingMetadata {
+    path: PathBuf,
+    plan: ImportPlan,
+    overwrite: bool,
+    edits: bool,
+    flags: bool,
+    collections: bool,
 }
 
 /// What the settings dialog wants the app to do this frame.
@@ -37,9 +53,37 @@ pub enum SettingsAction {
     MoveCatalog(PathBuf),
     /// Validate the Immich URL + API key in the background.
     TestImmich { url: String, api_key: String },
+    /// Write every edit, flag and collection membership to this file.
+    ExportMetadata(PathBuf),
+    /// Read this bundle and work out what applying it would do; the app
+    /// answers with `on_metadata_scanned`.
+    ScanMetadata(PathBuf),
+    /// Apply the bundle that is currently pending.
+    ApplyMetadata { path: PathBuf, options: ApplyOptions },
 }
 
 impl SettingsDialog {
+    /// The app has read a bundle: show its plan for confirmation.
+    pub fn on_metadata_scanned(&mut self, path: PathBuf, plan: ImportPlan) {
+        self.metadata_message = None;
+        self.pending_metadata = Some(PendingMetadata {
+            path,
+            plan,
+            // Default to the cautious answer; the file is usually newer, but
+            // silently replacing local work is the one unrecoverable move.
+            overwrite: false,
+            edits: true,
+            flags: true,
+            collections: true,
+        });
+    }
+
+    /// A finished (or failed) export/import: drop the prompt, show the result.
+    pub fn on_metadata_done(&mut self, message: String) {
+        self.pending_metadata = None;
+        self.metadata_message = Some(message);
+    }
+
     pub fn on_move_done(&mut self, outcome: MoveOutcome) {
         self.move_progress = None;
         self.move_cancel = None;
@@ -188,6 +232,164 @@ impl SettingsDialog {
                     }
                 }
                 if let Some(msg) = &self.catalog_message {
+                    ui.label(egui::RichText::new(msg).weak());
+                }
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(6.0);
+                ui.label(crate::ui::theme::overline_text("Transfer"));
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(
+                        "Carry develop edits, flags and collections to another \
+                         machine. Copy the photos across and import them there \
+                         first, then apply the file — photos are matched by \
+                         file name and size, never by folder.",
+                    )
+                    .weak()
+                    .small(),
+                );
+                ui.add_space(6.0);
+
+                let mut cancel_pending = false;
+                if let Some(pend) = self.pending_metadata.as_mut() {
+                    let plan = &pend.plan;
+                    ui.label(
+                        egui::RichText::new(
+                            pend.path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_default(),
+                        )
+                        .strong(),
+                    );
+                    ui.label(format!(
+                        "{} photos in the file, {} found in this library",
+                        plan.photos, plan.matched
+                    ));
+                    if plan.unmatched > 0 {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} not here yet — import those photos, then apply \
+                                 the file again",
+                                plan.unmatched
+                            ))
+                            .weak()
+                            .small(),
+                        );
+                    }
+                    if !plan.new_collections.is_empty() {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} new collection(s): {}",
+                                plan.new_collections.len(),
+                                plan.new_collections.join(", ")
+                            ))
+                            .weak()
+                            .small(),
+                        );
+                    }
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Apply:");
+                        ui.checkbox(&mut pend.edits, "Edits");
+                        ui.checkbox(&mut pend.flags, "Flags");
+                        ui.checkbox(&mut pend.collections, "Collections");
+                    });
+                    ui.add_space(4.0);
+                    if plan.conflicts > 0 {
+                        ui.label(format!(
+                            "⚠ {} of those already have edits or flags here:",
+                            plan.conflicts
+                        ));
+                        ui.radio_value(
+                            &mut pend.overwrite,
+                            false,
+                            format!("Keep my work, apply the other {}", 
+                                plan.matched.saturating_sub(plan.conflicts)),
+                        );
+                        ui.radio_value(
+                            &mut pend.overwrite,
+                            true,
+                            format!("Overwrite all {}", plan.matched),
+                        );
+                    }
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        let can_apply = plan.matched > 0
+                            && (pend.edits || pend.flags || pend.collections);
+                        if ui
+                            .add_enabled(
+                                can_apply,
+                                egui::Button::new("Apply"),
+                            )
+                            .clicked()
+                        {
+                            action = SettingsAction::ApplyMetadata {
+                                path: pend.path.clone(),
+                                options: ApplyOptions {
+                                    edits: pend.edits,
+                                    flags: pend.flags,
+                                    collections: pend.collections,
+                                    on_conflict: if pend.overwrite {
+                                        OnConflict::Overwrite
+                                    } else {
+                                        OnConflict::Skip
+                                    },
+                                },
+                            };
+                        }
+                        if ui.button("Cancel").clicked() {
+                            cancel_pending = true;
+                        }
+                    });
+                } else {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button("Export metadata…")
+                            .on_hover_text(
+                                "Write every edit, flag and collection to one file",
+                            )
+                            .clicked()
+                        {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .set_file_name(format!(
+                                    "library.{}",
+                                    crate::metadata_transfer::EXTENSION
+                                ))
+                                .add_filter(
+                                    "Darkroom metadata",
+                                    &[crate::metadata_transfer::EXTENSION],
+                                )
+                                .save_file()
+                            {
+                                action = SettingsAction::ExportMetadata(path);
+                            }
+                        }
+                        if ui
+                            .button("Import metadata…")
+                            .on_hover_text(
+                                "Apply a file written by another machine",
+                            )
+                            .clicked()
+                        {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter(
+                                    "Darkroom metadata",
+                                    &[crate::metadata_transfer::EXTENSION],
+                                )
+                                .pick_file()
+                            {
+                                action = SettingsAction::ScanMetadata(path);
+                            }
+                        }
+                    });
+                }
+                if cancel_pending {
+                    self.pending_metadata = None;
+                }
+                if let Some(msg) = &self.metadata_message {
                     ui.label(egui::RichText::new(msg).weak());
                 }
 

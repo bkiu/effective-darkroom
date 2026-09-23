@@ -6,4 +6,5 @@ pub mod immich;
 pub mod importer;
 pub mod jobs;
 pub mod maintenance;
+pub mod metadata_transfer;
 pub mod ui;

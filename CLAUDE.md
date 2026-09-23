@@ -44,6 +44,12 @@ changes run `cargo build --release` or the launcher serves a stale binary.
 - `src/importer/` — background import (files/folders or camera via libgphoto2),
   capture-date `YYYY/MM-DD` sorting, name+size dedupe, scan/picker streaming,
   cancel flag. Camera imports never delete from the card.
+- `src/metadata_transfer.rs` — export/import of develop work as one JSON
+  `.edmeta` bundle (edits, flags, collection membership) so a second machine
+  can adopt it. Photos are matched by case-folded file name + byte size (the
+  importer's dedupe pair), never by path; `plan()` measures a bundle against
+  the catalog for confirmation before `apply()` writes, and existing local
+  work is skipped or overwritten per `OnConflict`.
 - `src/jobs/` — worker threads + crossbeam channels; workers clone the
   `egui::Context` and `request_repaint()`. Decode thread is latest-wins.
 - `src/ui/` — one module per surface (grid, loupe, filmstrip, slideshow,
@@ -63,6 +69,9 @@ changes run `cargo build --release` or the launcher serves a stale binary.
   Adobe JPEG) pairs; paste output into `assets/base_curves/*.json`.
 - `import_cli` / `export_cli` / `camera_cli` — headless import/export/camera
   smoke tests. Use `XDG_DATA_HOME=<scratch>` to isolate a test catalog.
+- `metadata_cli` — headless `export` / `plan` / `apply` of an `.edmeta`
+  bundle; with `XDG_DATA_HOME=<scratch>` this round-trips a real export into
+  a throwaway catalog.
 - `probe` (in libraw-ffi) — LibRaw metadata/thumb/decode check.
 - `repaint_test`, `repaint_mode_test`, `wgpu_alloc_test` — repros for the
   machine quirks below.

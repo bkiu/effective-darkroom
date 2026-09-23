@@ -281,6 +281,18 @@ impl Catalog {
             .optional()?)
     }
 
+    /// Every stored edit, keyed by image id (the bulk form of `load_edit`,
+    /// for callers that would otherwise query once per photo).
+    pub fn all_edits(&self) -> Result<std::collections::HashMap<i64, (i64, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT image_id, params_version, params_json FROM edits")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, i64>(0)?, (r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
     /// Ids of images that have stored develop edits.
     pub fn edited_image_ids(&self) -> Result<std::collections::HashSet<i64>> {
         let mut stmt = self.conn.prepare("SELECT image_id FROM edits")?;

@@ -62,6 +62,16 @@ release binary.
   naming. Batch-exports the selection through the exact same GPU pipeline
   as the preview; settings persist between sessions.
 
+- **Moving work between machines**: Settings → Transfer writes every
+  develop edit, flag and collection membership to one `.edmeta` file. Copy
+  the photos to the other computer and import them there as usual, then
+  apply the file — photos are matched by original file name and byte size,
+  so the two libraries need not share a folder layout. The dialog reports
+  how many photos it found before writing anything, and asks what to do
+  about photos that already carry work here (keep the local version, or let
+  the file win). Photos the file mentions that are not in the library yet
+  are simply reported, so you can import them and apply the file again.
+
 ## Keyboard shortcuts
 
 | Key | Action |

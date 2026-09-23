@@ -903,6 +903,136 @@ impl App {
 
     /// Move catalog.db + thumbs to a new directory and reopen. Runs inline;
     /// the data is small (the database plus the thumbnail cache).
+    /// Settings → Export metadata: every edit, flag and collection
+    /// membership into one file, for another machine to apply.
+    fn export_metadata(&mut self, path: PathBuf) {
+        // Slider moves live in memory until they are flushed; without this
+        // the file would miss whatever is open right now.
+        self.flush_edits();
+        // A picker that dropped the extension still produces a file the
+        // import filter can see.
+        let path = if path.extension().is_none() {
+            path.with_extension(crate::metadata_transfer::EXTENSION)
+        } else {
+            path
+        };
+        let source = self
+            .config
+            .library_root
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        let result = crate::metadata_transfer::export(&self.catalog, &source).and_then(
+            |bundle| {
+                crate::metadata_transfer::write_file(&path, &bundle)
+                    .map(|()| bundle.photos.len())
+            },
+        );
+        let msg = match result {
+            Ok(n) => format!(
+                "✔ Wrote {n} edited or flagged photos to {}",
+                path.display()
+            ),
+            Err(e) => {
+                tracing::error!("export metadata: {e:#}");
+                format!("Export failed: {e:#}")
+            }
+        };
+        self.settings.on_metadata_done(msg);
+    }
+
+    /// Read a bundle and measure it against this library, so the dialog can
+    /// say what applying it would do before anything is written.
+    fn scan_metadata(&mut self, path: PathBuf) {
+        match crate::metadata_transfer::read_file(&path)
+            .and_then(|b| crate::metadata_transfer::plan(&self.catalog, &b))
+        {
+            Ok(plan) => self.settings.on_metadata_scanned(path, plan),
+            Err(e) => {
+                tracing::error!("read metadata: {e:#}");
+                self.settings.on_metadata_done(format!("{e:#}"));
+            }
+        }
+    }
+
+    fn apply_metadata(
+        &mut self,
+        path: PathBuf,
+        options: crate::metadata_transfer::ApplyOptions,
+    ) {
+        // An unsaved slider on the open photo would otherwise be written
+        // back over whatever we just imported.
+        self.flush_edits();
+        let result = crate::metadata_transfer::read_file(&path)
+            .and_then(|b| crate::metadata_transfer::apply(&self.catalog, &b, options));
+        let msg = match result {
+            Ok(out) => {
+                let mut parts = Vec::new();
+                if out.edits_applied > 0 {
+                    parts.push(format!("{} edits", out.edits_applied));
+                }
+                if out.flags_applied > 0 {
+                    parts.push(format!("{} flags", out.flags_applied));
+                }
+                if out.memberships_added > 0 {
+                    parts.push(format!(
+                        "{} added to {} collection(s)",
+                        out.memberships_added, out.collections_created
+                    ));
+                }
+                let mut msg = if parts.is_empty() {
+                    "Nothing to apply".to_string()
+                } else {
+                    format!("✔ Applied {}", parts.join(", "))
+                };
+                if out.skipped_conflicts > 0 {
+                    msg += &format!(
+                        "; kept local work on {} photo(s)",
+                        out.skipped_conflicts
+                    );
+                }
+                if out.unmatched > 0 {
+                    msg += &format!("; {} not in this library", out.unmatched);
+                }
+                for e in out.errors.iter().take(4) {
+                    tracing::error!("apply metadata: {e}");
+                }
+                if !out.errors.is_empty() {
+                    msg += &format!(" ({} errors, see the log)", out.errors.len());
+                }
+                self.refresh_after_metadata_import();
+                msg
+            }
+            Err(e) => {
+                tracing::error!("apply metadata: {e:#}");
+                format!("Import failed: {e:#}")
+            }
+        };
+        self.settings.on_metadata_done(msg);
+    }
+
+    /// Pull flags, collections and the open photo's edit back out of the
+    /// catalog after an import wrote them behind our back.
+    fn refresh_after_metadata_import(&mut self) {
+        match self.catalog.all_images() {
+            Ok(imgs) => self.images = imgs,
+            Err(e) => tracing::error!("reload images: {e:#}"),
+        }
+        self.reload_collections();
+        self.visible_dirty = true;
+        // The open photo may have just gained an edit; adopting it here lets
+        // the normal params-changed path re-render it.
+        if let Some(cur) = &mut self.current {
+            if let Ok(Some((_ver, json))) = self.catalog.load_edit(cur.id) {
+                let params = EditParams::from_json(&json);
+                cur.params = params.clone();
+                cur.saved_params = params;
+                cur.dirty_since = None;
+                cur.had_saved_edit = true;
+            }
+        }
+    }
+
     fn move_catalog(&mut self, new_dir: PathBuf) {
         let current = crate::catalog::data_dir();
         if current == new_dir {
@@ -1650,6 +1780,11 @@ impl eframe::App for App {
                 }
                 SettingsAction::TestImmich { url, api_key } => {
                     self.jobs.start_immich_test(url, api_key, ctx.clone());
+                }
+                SettingsAction::ExportMetadata(path) => self.export_metadata(path),
+                SettingsAction::ScanMetadata(path) => self.scan_metadata(path),
+                SettingsAction::ApplyMetadata { path, options } => {
+                    self.apply_metadata(path, options)
                 }
             }
             // Keep the Immich connection in sync with the dialog's edit
