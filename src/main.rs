@@ -14,15 +14,13 @@ fn main() -> eframe::Result {
     // Vulkan with a GL fallback — in practice Vulkan, since GL reports no
     // surface-compatible adapter on this compositor.
     //
-    // Adapter choice is ours rather than a power preference. The discrete GPU
-    // is the one KWin composites on, and it is the only one whose dmabufs the
-    // compositor will import here: presenting on the AMD iGPU dies with
-    // "importing the supplied dmabufs failed" and takes the Wayland
-    // connection with it. (This used to be the other way round, when the
-    // machine had a 3090 Ti whose driver failed the engine's large texture
-    // allocations. The current 3060 passes examples/wgpu_alloc_test, so the
-    // iGPU workaround is no longer needed.) WGPU_POWER_PREF=low picks the
-    // integrated GPU instead.
+    // Adapter choice is ours rather than a power preference: see
+    // `select_adapter`. In short, a discrete GPU is preferred (on the 3060
+    // machine it is the only one whose dmabufs the compositor will import),
+    // but not one another process has filled — the work machine's two
+    // 3090 Tis are each ~95% held by vLLM, and a develop session there dies
+    // of a real out-of-memory. WGPU_POWER_PREF=low picks the integrated GPU
+    // regardless.
     let mut wgpu_options = eframe::egui_wgpu::WgpuConfiguration::default();
     if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut wgpu_options.wgpu_setup {
         setup.instance_descriptor.backends =
@@ -73,12 +71,25 @@ fn main() -> eframe::Result {
     )
 }
 
+/// A discrete GPU needs at least this much free VRAM to be worth choosing.
+/// One 26 MP develop session holds ~0.5 GiB (f16 source, 8-bit output,
+/// half-res blur chain) and an export running alongside it on the same
+/// device about as much again, plus egui and the swapchain.
+const MIN_FREE_VRAM: u64 = 2 << 30;
+
 /// Pick the adapter to render and present with.
 ///
-/// Surface compatibility outranks everything: an adapter the compositor will
-/// not accept buffers from cannot present at all, and eframe panics rather
-/// than falling back. Among the usable ones, prefer the requested class of
-/// GPU, then Vulkan over the GL fallback.
+/// In order of importance:
+/// 1. It can present to this window: an adapter the compositor will not
+///    accept buffers from cannot present at all, and eframe panics rather
+///    than falling back.
+/// 2. It has room. A discrete GPU with less than `MIN_FREE_VRAM` free (some
+///    other process owns the card) loses to anything that does; integrated
+///    GPUs share system RAM and always count as roomy.
+/// 3. The requested class of GPU (discrete unless WGPU_POWER_PREF=low),
+///    then the other hardware class, and software rasterizers last.
+/// 4. More free VRAM — between two equal cards, the emptier one.
+/// 5. Vulkan over the GL fallback.
 fn select_adapter(
     adapters: &[eframe::wgpu::Adapter],
     surface: Option<&eframe::wgpu::Surface<'_>>,
@@ -91,33 +102,108 @@ fn select_adapter(
     } else {
         DeviceType::IntegratedGpu
     };
-    let rank = |adapter: &eframe::wgpu::Adapter| {
-        let info = adapter.get_info();
-        (
-            surface.is_none_or(|s| adapter.is_surface_supported(s)),
-            info.device_type == wanted,
-            info.backend == Backend::Vulkan,
-        )
-    };
-
-    let chosen = adapters
+    let ranked: Vec<_> = adapters
         .iter()
-        .max_by_key(|adapter| rank(adapter))
+        .map(|adapter| {
+            let info = adapter.get_info();
+            let free = free_vram(adapter);
+            let roomy = info.device_type != DeviceType::DiscreteGpu
+                || free.is_none_or(|f| f >= MIN_FREE_VRAM);
+            tracing::debug!(
+                "adapter {} ({:?}, {:?}): {} free",
+                info.name,
+                info.device_type,
+                info.backend,
+                free.map_or("unknown".into(), mib),
+            );
+            let class = match info.device_type {
+                t if t == wanted => 2,
+                DeviceType::DiscreteGpu | DeviceType::IntegratedGpu => 1,
+                _ => 0,
+            };
+            let rank = (
+                surface.is_none_or(|s| adapter.is_surface_supported(s)),
+                roomy,
+                class,
+                free.unwrap_or(0),
+                info.backend == Backend::Vulkan,
+            );
+            (adapter, info, free, rank)
+        })
+        .collect();
+
+    let (chosen, info, free, (presentable, roomy, class, ..)) = ranked
+        .iter()
+        .max_by_key(|(.., rank)| *rank)
         .ok_or_else(|| "no wgpu adapter available".to_string())?;
-    let (presentable, preferred, _) = rank(chosen);
     if !presentable {
         // Nothing here can present; let eframe fail with its own message
         // rather than pretending this one will work.
         tracing::error!("no wgpu adapter supports this window surface");
-    } else if !preferred {
-        let info = chosen.get_info();
+    } else if !roomy {
         tracing::warn!(
-            "preferred {wanted:?} adapter cannot present; using {} ({:?})",
+            "every usable GPU is nearly full; using {} with {} free",
+            info.name,
+            free.map_or("unknown".into(), mib),
+        );
+    } else if *class < 2 {
+        // Say why the preferred class lost: full, or unable to present.
+        let full = ranked.iter().any(|(.., (p, r, c, ..))| *p && !*r && *c == 2);
+        tracing::warn!(
+            "preferred {wanted:?} adapter {}; using {} ({:?})",
+            if full { "is nearly out of memory" } else { "cannot present" },
             info.name,
             info.device_type
         );
     }
-    Ok(chosen.clone())
+    Ok((*chosen).clone())
+}
+
+fn mib(bytes: u64) -> String {
+    format!("{} MiB", bytes >> 20)
+}
+
+/// Device-local memory still available to this process, summed over the
+/// adapter's VRAM heaps, from VK_EXT_memory_budget. The budget accounts for
+/// what other processes hold, which is the point: total VRAM says nothing
+/// when vLLM has 22 of 24 GiB. `None` when the adapter is not Vulkan, the
+/// driver lacks the extension, or the instance predates Vulkan 1.1.
+fn free_vram(adapter: &eframe::wgpu::Adapter) -> Option<u64> {
+    use ash::vk;
+    use eframe::wgpu::hal::api::Vulkan;
+
+    // SAFETY: only read-only physical-device queries are made, and the
+    // guard outlives every handle taken from it.
+    let hal = unsafe { adapter.as_hal::<Vulkan>() }?;
+    let shared = hal.shared_instance();
+    if shared.instance_api_version() < vk::API_VERSION_1_1 {
+        return None;
+    }
+    let instance = shared.raw_instance();
+    let phys = hal.raw_physical_device();
+
+    // SAFETY: valid physical device of a live instance.
+    let exts = unsafe { instance.enumerate_device_extension_properties(phys) }.ok()?;
+    let has_budget = exts.iter().any(|e| {
+        e.extension_name_as_c_str() == Ok(ash::ext::memory_budget::NAME)
+    });
+    if !has_budget {
+        return None;
+    }
+
+    let mut budget = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
+    let mut props = vk::PhysicalDeviceMemoryProperties2::default().push_next(&mut budget);
+    // SAFETY: Vulkan 1.1 core query; the budget struct is valid to chain
+    // whenever the device supports VK_EXT_memory_budget (checked above).
+    unsafe { instance.get_physical_device_memory_properties2(phys, &mut props) };
+    let heaps = props.memory_properties.memory_heaps_as_slice();
+    let free = heaps
+        .iter()
+        .enumerate()
+        .filter(|(_, heap)| heap.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL))
+        .map(|(i, _)| budget.heap_budget[i].saturating_sub(budget.heap_usage[i]))
+        .sum();
+    Some(free)
 }
 
 /// Route the window through XWayland instead of winit's native Wayland

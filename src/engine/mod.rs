@@ -18,6 +18,7 @@ pub mod exif_out;
 pub mod export;
 pub mod params;
 
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -143,6 +144,24 @@ pub struct RenderEngine {
 const OUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const BLUR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
+/// Run GPU allocations, catching an out-of-memory instead of letting it reach
+/// the uncaptured-error handler. Full-res textures are the engine's only big
+/// allocations, and the device may be shared with a process that has nearly
+/// filled it, so they must be able to fail. Error scopes are thread-local,
+/// so the export thread sharing this device cannot steal the result.
+fn oom_guard<T>(device: &wgpu::Device, alloc: impl FnOnce() -> T) -> Result<T, wgpu::Error> {
+    let scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let value = alloc();
+    // wgpu-core reports allocation errors synchronously, so the pop future
+    // is already resolved; a pending one would mean no error was recorded.
+    let pop = std::pin::pin!(scope.pop());
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    match pop.poll(&mut cx) {
+        std::task::Poll::Ready(Some(err)) => Err(err),
+        _ => Ok(value),
+    }
+}
+
 fn texture_bgl_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
@@ -201,6 +220,12 @@ impl RenderEngine {
         queue: wgpu::Queue,
         renderer: Option<Arc<RwLock<egui_wgpu::Renderer>>>,
     ) -> Self {
+        // wgpu's default handler panics. Anything the engine can foresee
+        // (out of memory) is caught in a scope where it happens; whatever
+        // still gets here leaves one broken frame, not a dead app.
+        device.on_uncaptured_error(Arc::new(|err: wgpu::Error| {
+            tracing::error!("wgpu: {err}");
+        }));
 
         let develop_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("develop"),
@@ -419,7 +444,16 @@ impl RenderEngine {
     }
 
     /// Upload a new source image; recreates dependent resources when needed.
-    pub fn set_source(&mut self, width: u32, height: u32, pixels: SourcePixels<'_>) {
+    ///
+    /// Fails when the GPU is out of memory. The previous source is kept in
+    /// that case (typically the embedded preview the full decode was about
+    /// to replace), so the view degrades rather than going blank.
+    pub fn set_source(
+        &mut self,
+        width: u32,
+        height: u32,
+        pixels: SourcePixels<'_>,
+    ) -> Result<(), wgpu::Error> {
         let (format, bytes_per_px, data): (_, u32, &[u8]) = match pixels {
             SourcePixels::Srgb8(rgba) => (wgpu::TextureFormat::Rgba8UnormSrgb, 4, rgba),
             SourcePixels::LinearF16(rgba) => (
@@ -438,16 +472,22 @@ impl RenderEngine {
             height,
             depth_or_array_layers: 1,
         };
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("develop-src"),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
+        // The blur chain is sized to the old source and rebuilt on demand;
+        // free it first so the new upload has its memory.
+        self.aux = None;
+        self.develop_bind_group = None;
+        let texture = oom_guard(&self.device, || {
+            self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("develop-src"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        })?;
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -470,20 +510,29 @@ impl RenderEngine {
             width,
             height,
         });
-        self.aux = None;
-        self.develop_bind_group = None;
-        self.ensure_output(width, height);
+        self.ensure_output(width, height)
     }
 
-    fn ensure_output(&mut self, width: u32, height: u32) {
+    fn ensure_output(&mut self, width: u32, height: u32) -> Result<(), wgpu::Error> {
         if let Some(out) = &self.output {
             if out.width == width && out.height == height {
-                return;
+                return Ok(());
             }
         }
-        let target = Self::make_target(&self.device, width, height, OUT_FORMAT, "develop-out");
-
+        // Drop the old target before allocating its replacement.
         let prev_id = self.output.take().and_then(|o| o.egui_id);
+        let target = match oom_guard(&self.device, || {
+            Self::make_target(&self.device, width, height, OUT_FORMAT, "develop-out")
+        }) {
+            Ok(target) => target,
+            Err(err) => {
+                if let (Some(id), Some(renderer)) = (prev_id, &self.renderer) {
+                    renderer.write().free_texture(&id);
+                }
+                return Err(err);
+            }
+        };
+
         let egui_id = self.renderer.as_ref().map(|renderer| {
             let mut renderer = renderer.write();
             match prev_id {
@@ -510,6 +559,7 @@ impl RenderEngine {
             width,
             height,
         });
+        Ok(())
     }
 
     fn blur_bind_group(&self, label: &str, input: &wgpu::TextureView, buf: &wgpu::Buffer) -> wgpu::BindGroup {
@@ -537,20 +587,34 @@ impl RenderEngine {
         })
     }
 
-    fn ensure_aux(&mut self) {
+    /// Build the half/eighth-res blur chain; false if the GPU has no room.
+    fn ensure_aux(&mut self) -> bool {
         if self.aux.is_some() {
-            return;
+            return true;
         }
-        let Some(source) = &self.source else { return };
+        let Some(source) = &self.source else { return false };
         let (hw, hh) = ((source.width / 2).max(1), (source.height / 2).max(1));
         let (ew, eh) = ((source.width / 8).max(1), (source.height / 8).max(1));
 
-        let half_a = Self::make_target(&self.device, hw, hh, BLUR_FORMAT, "half-a");
-        let half_b = Self::make_target(&self.device, hw, hh, BLUR_FORMAT, "half-b");
-        let half_final = Self::make_target(&self.device, hw, hh, BLUR_FORMAT, "half-final");
-        let eighth_a = Self::make_target(&self.device, ew, eh, BLUR_FORMAT, "eighth-a");
-        let eighth_b = Self::make_target(&self.device, ew, eh, BLUR_FORMAT, "eighth-b");
-        let eighth_final = Self::make_target(&self.device, ew, eh, BLUR_FORMAT, "eighth-final");
+        let device = &self.device;
+        let targets = oom_guard(device, || {
+            [
+                (hw, hh, "half-a"),
+                (hw, hh, "half-b"),
+                (hw, hh, "half-final"),
+                (ew, eh, "eighth-a"),
+                (ew, eh, "eighth-b"),
+                (ew, eh, "eighth-final"),
+            ]
+            .map(|(w, h, label)| Self::make_target(device, w, h, BLUR_FORMAT, label))
+        });
+        let [half_a, half_b, half_final, eighth_a, eighth_b, eighth_final] = match targets {
+            Ok(targets) => targets,
+            Err(err) => {
+                tracing::warn!("blur chain skipped (texture, clarity and color NR off): {err}");
+                return false;
+            }
+        };
 
         let blur_params = [
             BlurUniforms {
@@ -604,6 +668,7 @@ impl RenderEngine {
             bg_h_8,
             bg_v_8,
         });
+        true
     }
 
     fn ensure_develop_bind_group(&mut self, use_blur: bool) {
@@ -746,11 +811,14 @@ impl RenderEngine {
             (src.width, src.height)
         };
         let (out_w, out_h) = crop::output_size(&params.crop, src_w, src_h, crop_preview);
-        self.ensure_output(out_w, out_h);
-        self.output.as_ref()?;
+        if let Err(err) = self.ensure_output(out_w, out_h) {
+            tracing::error!("no GPU memory for a {out_w}x{out_h} render: {err}");
+            return None;
+        }
 
-        let use_blur =
-            params.texture != 0.0 || params.clarity != 0.0 || params.color_nr > 0.0;
+        // Without room for the blur chain, render the rest of the edit.
+        let use_blur = (params.texture != 0.0 || params.clarity != 0.0 || params.color_nr > 0.0)
+            && self.ensure_aux();
         let baseline_ev = base.map(|b| b.baseline_ev).unwrap_or(0.0);
         let uv = crop::uv_affine(&params.crop, src_w, src_h, crop_preview);
 
@@ -767,9 +835,6 @@ impl RenderEngine {
             )),
         );
         self.upload_lut(params, base);
-        if use_blur {
-            self.ensure_aux();
-        }
         self.ensure_develop_bind_group(use_blur);
 
         let bind_group = self.develop_bind_group.as_ref()?;
@@ -846,12 +911,16 @@ impl RenderEngine {
         let (w, h) = (output.width, output.height);
         // Rows must be 256-byte aligned for texture→buffer copies.
         let padded = (w * 4).div_ceil(256) * 256;
-        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("export-readback"),
-            size: padded as u64 * h as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let buf = oom_guard(&self.device, || {
+            self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("export-readback"),
+                size: padded as u64 * h as u64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            })
+        })
+        .inspect_err(|err| tracing::error!("no GPU memory for readback: {err}"))
+        .ok()?;
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {

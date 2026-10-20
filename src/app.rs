@@ -214,6 +214,9 @@ pub struct App {
     decode_generation: u64,
     /// Latest rendered output for the loupe.
     rendered: Option<(egui::TextureId, egui::Vec2)>,
+    /// Why the current photo is shown below full size (the GPU had no room
+    /// for it); drawn over the image until another photo opens.
+    gpu_notice: Option<String>,
     logo: Option<egui::TextureHandle>,
     startup_error: Option<String>,
 }
@@ -336,6 +339,7 @@ impl App {
             latest_zoom: zoom,
             decode_generation: 0,
             rendered: None,
+            gpu_notice: None,
             logo,
             startup_error,
         }
@@ -472,6 +476,7 @@ impl App {
             src_dims: None,
         });
         self.rendered = None;
+        self.gpu_notice = None;
         self.loupe.reset_view();
         if let Some(engine) = &mut self.engine {
             engine.clear_source();
@@ -555,7 +560,6 @@ impl App {
                     cur.loading = !is_final;
                     cur.rendered_params = None; // force re-render
                     cur.shot_info = Some(image.shot_info.clone());
-                    cur.src_dims = Some((image.width, image.height));
 
                     if let Some(as_shot) = image.as_shot {
                         cur.as_shot = Some(as_shot);
@@ -575,21 +579,31 @@ impl App {
                     }
 
                     if let Some(engine) = &mut self.engine {
-                        match &image.pixels {
-                            FullPixels::Srgb8(rgba) => {
-                                cur.source_is_linear = false;
-                                engine.set_source(
-                                    image.width,
-                                    image.height,
-                                    SourcePixels::Srgb8(rgba),
-                                );
-                            }
+                        let (pixels, linear) = match &image.pixels {
+                            FullPixels::Srgb8(rgba) => (SourcePixels::Srgb8(rgba), false),
                             FullPixels::LinearF16(rgba) => {
-                                cur.source_is_linear = true;
-                                engine.set_source(
+                                (SourcePixels::LinearF16(rgba), true)
+                            }
+                        };
+                        match engine.set_source(image.width, image.height, pixels) {
+                            Ok(()) => {
+                                cur.source_is_linear = linear;
+                                cur.src_dims = Some((image.width, image.height));
+                                self.gpu_notice = None;
+                            }
+                            // The engine kept the previous source (usually
+                            // the embedded preview), so leave its dims and
+                            // tone handling in place and say what happened.
+                            Err(err) => {
+                                tracing::error!(
+                                    "image {image_id}: no GPU memory for {}x{}: {err}",
                                     image.width,
-                                    image.height,
-                                    SourcePixels::LinearF16(rgba),
+                                    image.height
+                                );
+                                cur.loading = false;
+                                self.gpu_notice = Some(
+                                    "⚠  Not enough GPU memory for the full-size image"
+                                        .to_string(),
                                 );
                             }
                         }
@@ -1653,6 +1667,22 @@ impl App {
         }
     }
 
+    /// Banner along the bottom of the photo when the GPU could not hold it
+    /// at full size.
+    fn show_gpu_notice(&self, ui: &egui::Ui, image_rect: egui::Rect) {
+        let Some(text) = &self.gpu_notice else { return };
+        let painter = ui.painter_at(image_rect);
+        let galley = painter.layout_no_wrap(
+            text.clone(),
+            egui::FontId::proportional(13.0),
+            crate::ui::theme::text_primary(),
+        );
+        let pos = image_rect.center_bottom() - egui::vec2(galley.size().x / 2.0, galley.size().y + 24.0);
+        let bg = egui::Rect::from_min_size(pos, galley.size()).expand2(egui::vec2(12.0, 6.0));
+        painter.rect_filled(bg, 6.0, egui::Color32::from_black_alpha(200));
+        painter.galley(pos, galley, crate::ui::theme::text_primary());
+    }
+
     /// Re-render through the engine if params changed or a new source landed.
     fn maybe_render(&mut self) {
         let Some(engine) = &mut self.engine else { return };
@@ -1995,6 +2025,7 @@ impl eframe::App for App {
                                 None,
                                 false,
                             );
+                            self.show_gpu_notice(ui, image_rect);
                             self.show_strip_caret(ui, image_rect);
                         }
                     }
@@ -2120,6 +2151,7 @@ impl eframe::App for App {
                             cur.dirty_since = Some(Instant::now());
                         }
                     }
+                    self.show_gpu_notice(ui, image_rect);
                     self.show_strip_caret(ui, image_rect);
                 });
             }

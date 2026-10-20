@@ -73,8 +73,8 @@ changes run `cargo build --release` or the launcher serves a stale binary.
   bundle; with `XDG_DATA_HOME=<scratch>` this round-trips a real export into
   a throwaway catalog.
 - `probe` (in libraw-ffi) — LibRaw metadata/thumb/decode check.
-- `repaint_test`, `repaint_mode_test`, `wgpu_alloc_test` — repros for the
-  machine quirks below.
+- `repaint_test`, `repaint_mode_test`, `wgpu_alloc_test`, `vram_probe` —
+  repros for the machine quirks below.
 
 Dev hooks: `ED_STARTUP_VIEW=develop`, `ED_STARTUP_IMAGE=<substring>`,
 `ED_STARTUP_CROP=1`, `ED_TITLE=<caption>`.
@@ -91,13 +91,18 @@ Dev hooks: `ED_STARTUP_VIEW=develop`, `ED_STARTUP_IMAGE=<substring>`,
   Retest after a winit or KWin update.
 - Backends are pinned to VULKAN|GL in `main.rs`; GL alone cannot present here
   (`incompatible_surface_backends: GL`), so this is Vulkan in practice.
-- The discrete GPU is now the default (`select_adapter` in `main.rs`, surface
-  compatibility first, then the preferred device class). The old LowPower
-  default existed because a 3090 Ti failed ~100MB texture allocations with
-  spurious OOM; the card is now a 3060 that passes `wgpu_alloc_test`, while
-  the AMD iGPU's dmabufs are rejected by the compositor ("importing the
-  supplied dmabufs failed", which kills the Wayland connection) — so the
-  preference flipped. `WGPU_POWER_PREF=low` picks the iGPU again.
+- Adapter choice (`select_adapter` in `main.rs`) has to suit two machines:
+  the 3060 machine, where only the discrete GPU's dmabufs are accepted
+  by the compositor (the AMD iGPU fails with "importing the supplied dmabufs
+  failed"), and this workstation, whose two 3090 Tis are each ~95% held by a
+  vLLM server. So: surface compatibility first, then free VRAM (a discrete
+  GPU with < 2 GiB free per VK_EXT_memory_budget loses), then device class,
+  then the emptier card. Here that lands on the 7900X iGPU. The old "3090 Ti
+  spurious OOM" was this real shortage all along. `WGPU_POWER_PREF=low`
+  forces the iGPU; `examples/vram_probe` shows what each adapter can
+  actually allocate. Engine allocations run under an OOM error scope
+  (`oom_guard`) so a full card degrades (preview kept, blur chain skipped,
+  export error) instead of panicking.
 - egui embeds its fonts. Inter is bundled as primary; before using a non-ASCII
   glyph in UI strings check coverage (past tofu bug) — ⚑⚐✖✔⚠🗑📷 are safe.
 - GUI verification: prefer `render_cli` headless renders. Screenshots require

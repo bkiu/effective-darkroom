@@ -87,14 +87,13 @@ fn main() -> anyhow::Result<()> {
     let (device, queue) = block_on(adapter.request_device(&Default::default()))?;
 
     let mut engine = RenderEngine::new_headless(device, queue);
-    match &image.pixels {
-        FullPixels::Srgb8(rgba) => {
-            engine.set_source(image.width, image.height, SourcePixels::Srgb8(rgba))
-        }
-        FullPixels::LinearF16(rgba) => {
-            engine.set_source(image.width, image.height, SourcePixels::LinearF16(rgba))
-        }
-    }
+    let pixels = match &image.pixels {
+        FullPixels::Srgb8(rgba) => SourcePixels::Srgb8(rgba),
+        FullPixels::LinearF16(rgba) => SourcePixels::LinearF16(rgba),
+    };
+    engine
+        .set_source(image.width, image.height, pixels)
+        .map_err(|e| anyhow::anyhow!("not enough GPU memory for a {}x{} image: {e}", image.width, image.height))?;
 
     let (ref_temp, ref_tint) = match image.as_shot {
         Some(w) => (w.temp, w.tint),

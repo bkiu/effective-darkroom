@@ -14,6 +14,8 @@ libraw-ffi = { path = "crates/libraw-ffi" }
 eframe = { version = "0.35", default-features = false, features = ["wgpu", "wayland", "x11", "default_fonts"] }
 egui = "0.35"
 egui_extras = "0.35"
+# Same ash as wgpu-hal: free-VRAM query (VK_EXT_memory_budget) for adapter choice.
+ash = "0.38"
 
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

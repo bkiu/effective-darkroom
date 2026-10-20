@@ -210,14 +210,13 @@ pub(crate) fn render_full(
     }
     let base = (rec.kind == FileKind::Raw).then(|| BaseCurve::for_camera(&rec.camera_model));
 
-    match &image.pixels {
-        FullPixels::Srgb8(rgba) => {
-            engine.set_source(image.width, image.height, SourcePixels::Srgb8(rgba))
-        }
-        FullPixels::LinearF16(rgba) => {
-            engine.set_source(image.width, image.height, SourcePixels::LinearF16(rgba))
-        }
-    }
+    let pixels = match &image.pixels {
+        FullPixels::Srgb8(rgba) => SourcePixels::Srgb8(rgba),
+        FullPixels::LinearF16(rgba) => SourcePixels::LinearF16(rgba),
+    };
+    engine
+        .set_source(image.width, image.height, pixels)
+        .map_err(|e| anyhow::anyhow!("not enough GPU memory for a {}x{} image: {e}", image.width, image.height))?;
     let _ = engine.render(&params, ref_temp, ref_tint, base.as_ref(), false);
     engine.read_output().context("GPU readback")
 }
