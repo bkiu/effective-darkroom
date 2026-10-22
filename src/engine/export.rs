@@ -185,10 +185,23 @@ pub(crate) fn render_full(
         FileKind::Jpeg => full::decode_preview(rec)?,
         FileKind::Raw => full::decode_linear_raw(rec)?,
     };
+    let saved = catalog.load_edit(rec.id)?.map(|(_ver, json)| json);
+    render_decoded(engine, rec, &image, saved.as_deref())
+}
 
+/// Render decoded pixels through the develop pipeline with `saved` edits
+/// (the catalog's params JSON; `None` renders defaults). The per-camera base
+/// curve applies only to a linear RAW decode, as in the develop view: an
+/// embedded preview is already camera-toned.
+pub(crate) fn render_decoded(
+    engine: &mut RenderEngine,
+    rec: &ImageRecord,
+    image: &full::FullImage,
+    saved: Option<&str>,
+) -> Result<image::RgbaImage> {
     // Edit params: saved edit or defaults (+ as-shot WB adoption for RAW).
-    let mut params = match catalog.load_edit(rec.id)? {
-        Some((_ver, json)) => EditParams::from_json(&json),
+    let mut params = match saved {
+        Some(json) => EditParams::from_json(json),
         None => {
             let mut p = EditParams::default();
             if rec.kind == FileKind::Jpeg {
@@ -208,7 +221,9 @@ pub(crate) fn render_full(
         params.wb_temp = ref_temp;
         params.wb_tint = ref_tint;
     }
-    let base = (rec.kind == FileKind::Raw).then(|| BaseCurve::for_camera(&rec.camera_model));
+    let linear = matches!(image.pixels, FullPixels::LinearF16(_));
+    let base = (rec.kind == FileKind::Raw && linear)
+        .then(|| BaseCurve::for_camera(&rec.camera_model));
 
     let pixels = match &image.pixels {
         FullPixels::Srgb8(rgba) => SourcePixels::Srgb8(rgba),

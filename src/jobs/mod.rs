@@ -93,7 +93,10 @@ pub struct Jobs {
 }
 
 impl Jobs {
-    pub fn new(ctx: egui::Context) -> Self {
+    /// `gpu` is the GUI's device and queue; without it, edited photos get
+    /// their unedited thumbnail.
+    pub fn new(ctx: egui::Context, gpu: Option<(eframe::wgpu::Device, eframe::wgpu::Queue)>) -> Self {
+        let thumb_gpu = gpu.map(|(device, queue)| std::sync::Arc::new(ThumbGpu::new(device, queue)));
         let (thumb_tx, thumb_rx) = crossbeam_channel::unbounded::<JobRequest>();
         let (results_tx, results_rx) = crossbeam_channel::unbounded::<JobResult>();
 
@@ -104,9 +107,10 @@ impl Jobs {
             let rx = thumb_rx.clone();
             let tx = results_tx.clone();
             let ctx = ctx.clone();
+            let gpu = thumb_gpu.clone();
             std::thread::Builder::new()
                 .name(format!("thumb-{i}"))
-                .spawn(move || thumb_worker(rx, tx, ctx))
+                .spawn(move || thumb_worker(rx, tx, ctx, gpu))
                 .expect("spawn thumb worker");
         }
 
@@ -413,9 +417,71 @@ fn full_decode_worker(
     }
 }
 
-fn thumb_worker(rx: Receiver<JobRequest>, tx: Sender<JobResult>, ctx: egui::Context) {
+/// One headless develop engine shared by the thumbnail workers for edited
+/// thumbnails: decoding stays parallel, GPU work takes turns. Built on first
+/// use and emptied after every render, so it holds no image memory while idle.
+struct ThumbGpu {
+    device: eframe::wgpu::Device,
+    queue: eframe::wgpu::Queue,
+    engine: std::sync::Mutex<Option<crate::engine::RenderEngine>>,
+}
+
+impl ThumbGpu {
+    fn new(device: eframe::wgpu::Device, queue: eframe::wgpu::Queue) -> Self {
+        Self {
+            device,
+            queue,
+            engine: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn render(
+        &self,
+        rec: &ImageRecord,
+        image: &crate::decode::full::FullImage,
+        edit_json: &str,
+    ) -> anyhow::Result<image::RgbaImage> {
+        let mut guard = self.engine.lock().unwrap_or_else(|e| e.into_inner());
+        let engine = guard.get_or_insert_with(|| {
+            crate::engine::RenderEngine::new_headless(self.device.clone(), self.queue.clone())
+        });
+        let result = crate::engine::export::render_decoded(engine, rec, image, Some(edit_json));
+        engine.release();
+        result
+    }
+}
+
+fn thumb_worker(
+    rx: Receiver<JobRequest>,
+    tx: Sender<JobResult>,
+    ctx: egui::Context,
+    gpu: Option<std::sync::Arc<ThumbGpu>>,
+) {
+    // Own connection, as the export thread has: the edit is read when the job
+    // runs, so a queue of refreshes for one photo settles on its latest edit.
+    let catalog = gpu.as_ref().and_then(|_| {
+        crate::catalog::Catalog::open_default()
+            .inspect_err(|e| tracing::warn!("thumb worker: no catalog, edits not shown: {e:#}"))
+            .ok()
+    });
     while let Ok(JobRequest::Thumb(rec)) = rx.recv() {
-        let result = match crate::decode::thumbs::get_or_create(&rec) {
+        let edit = catalog
+            .as_ref()
+            .and_then(|c| c.load_edit(rec.id).ok().flatten())
+            .map(|(_ver, json)| json);
+        let thumb = match (&edit, &gpu) {
+            (Some(json), Some(gpu)) => crate::decode::thumbs::get_or_create_edited(
+                &rec,
+                json,
+                |image| gpu.render(&rec, image, json),
+            )
+            .or_else(|e| {
+                tracing::warn!("edited thumb for {}: {e:#}", rec.file_name);
+                crate::decode::thumbs::get_or_create(&rec)
+            }),
+            _ => crate::decode::thumbs::get_or_create(&rec),
+        };
+        let result = match thumb {
             Ok(rgba) => {
                 let size = [rgba.width() as usize, rgba.height() as usize];
                 JobResult::ThumbReady {

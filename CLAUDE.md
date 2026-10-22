@@ -28,6 +28,9 @@ changes run `cargo build --release` or the launcher serves a stale binary.
   linear gamma, camera WB, sRGB primaries). Runtime version assert in wrapper.
 - `src/catalog/` — SQLite via rusqlite (bundled) at
   `~/.local/share/effective-darkroom/catalog.db`; thumbnails cached next to it.
+  Edited photos also get `thumbs/<id>-e<hash of edit JSON>.jpg`, rendered by
+  the thumb workers through a shared headless engine from the embedded
+  preview (no base curve); the app re-requests a thumb after every save.
   Images + edits (JSON params blob) + collections + flags. Migrations are
   append-only steps in `schema.rs` (bump `SCHEMA_VERSION`, add a step).
 - `src/engine/` — the GPU develop pipeline (all editing is non-destructive;

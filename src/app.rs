@@ -303,7 +303,7 @@ impl App {
             new_collection_focus_pending: false,
             rename_collection: None,
             rename_collection_focus_pending: false,
-            jobs: Jobs::new(cc.egui_ctx.clone()),
+            jobs: Jobs::new(cc.egui_ctx.clone(), engine.as_ref().map(|e| e.device_queue())),
             engine,
             view,
             library_mode: LibraryMode::Grid,
@@ -491,6 +491,7 @@ impl App {
 
     /// Write pending edit changes for the current image to the catalog.
     fn flush_edits(&mut self) {
+        let mut saved = None;
         if let Some(cur) = &mut self.current {
             if cur.params != cur.saved_params {
                 if let Err(e) =
@@ -502,9 +503,22 @@ impl App {
                     cur.saved_params = cur.params.clone();
                     // Keep the Edited filter facet current.
                     self.visible_dirty = true;
+                    saved = Some(cur.id);
                 }
             }
             cur.dirty_since = None;
+        }
+        self.refresh_thumbs(saved);
+    }
+
+    /// Re-render thumbnails whose edit changed. The old texture stays up
+    /// until the new one lands, so grid and filmstrip don't flash empty.
+    fn refresh_thumbs(&mut self, ids: impl IntoIterator<Item = i64>) {
+        for id in ids {
+            let Some(rec) = self.images.iter().find(|r| r.id == id) else { continue };
+            self.grid.failed.remove(&id);
+            self.grid.pending.insert(id);
+            self.jobs.request_thumb(rec.clone());
         }
     }
 
@@ -1014,6 +1028,11 @@ impl App {
             .and_then(|b| crate::metadata_transfer::apply(&self.catalog, &b, options));
         let msg = match result {
             Ok(out) => {
+                if out.edits_applied > 0 {
+                    // Any photo may have a new edit; let thumbnails reload
+                    // as they come into view.
+                    self.grid.textures.clear();
+                }
                 let mut parts = Vec::new();
                 if out.edits_applied > 0 {
                     parts.push(format!("{} edits", out.edits_applied));
@@ -1144,8 +1163,7 @@ impl App {
             return;
         }
         for rec in &records {
-            let thumb = crate::catalog::thumbs_dir().join(format!("{}.jpg", rec.id));
-            let _ = std::fs::remove_file(thumb);
+            crate::decode::thumbs::remove_cached(rec.id);
             if from_disk {
                 if let Err(e) = trash::delete(&rec.abs_path) {
                     tracing::error!("trash {}: {e:#}", rec.abs_path.display());
@@ -1211,6 +1229,8 @@ impl App {
             }
         }
         self.visible_dirty = true;
+        let ids: Vec<i64> = self.grid.selection.iter().copied().collect();
+        self.refresh_thumbs(ids);
     }
 
     /// Left side panel: collection list with create/delete.

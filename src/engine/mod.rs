@@ -439,6 +439,17 @@ impl RenderEngine {
         self.histogram = None;
     }
 
+    /// Drop every image-sized resource (source, blur chain, output), for an
+    /// engine that sits idle between jobs on a device others need.
+    pub fn release(&mut self) {
+        self.clear_source();
+        if let Some(id) = self.output.take().and_then(|o| o.egui_id) {
+            if let Some(renderer) = &self.renderer {
+                renderer.write().free_texture(&id);
+            }
+        }
+    }
+
     pub fn has_source(&self) -> bool {
         self.source.is_some()
     }

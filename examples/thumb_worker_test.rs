@@ -5,7 +5,7 @@ use effective_darkroom::jobs::{JobResult, Jobs};
 
 fn main() -> anyhow::Result<()> {
     let ctx = egui::Context::default();
-    let jobs = Jobs::new(ctx);
+    let jobs = Jobs::new(ctx, None);
     let catalog = Catalog::open_default()?;
     let images = catalog.all_images()?;
     println!("requesting {} thumbs", images.len());

@@ -2,6 +2,12 @@
 //!
 //! JPEGs are decoded and downscaled directly; RAWs use the embedded preview
 //! JPEG (full-size on both the EOS RP and X100V) so no demosaic is needed.
+//!
+//! Photos with a saved edit get a second thumbnail rendered through the
+//! develop pipeline from that same source (`get_or_create_edited`). Its cache
+//! file is keyed by a hash of the edit JSON, so any change to the edit, from
+//! a slider, a paste or an imported bundle, names a new file and the stale
+//! one is never served.
 
 use std::path::PathBuf;
 
@@ -9,11 +15,98 @@ use anyhow::{Context, Result};
 use image::DynamicImage;
 
 use crate::catalog::{thumbs_dir, FileKind, ImageRecord};
+use crate::decode::full::{FullImage, FullPixels};
 
 pub const THUMB_LONG_EDGE: u32 = 512;
 
 fn cache_path(image_id: i64) -> PathBuf {
     thumbs_dir().join(format!("{image_id}.jpg"))
+}
+
+/// Bump to invalidate every edited thumbnail after a pipeline change that
+/// alters how saved edits render.
+const EDITED_RENDER_VERSION: u32 = 1;
+
+fn edited_prefix(image_id: i64) -> String {
+    format!("{image_id}-e")
+}
+
+fn edited_cache_path(image_id: i64, edit_json: &str) -> PathBuf {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (EDITED_RENDER_VERSION, edit_json).hash(&mut h);
+    thumbs_dir().join(format!("{}{:016x}.jpg", edited_prefix(image_id), h.finish()))
+}
+
+/// Delete every cached thumbnail of `image_id`, edited ones included.
+pub fn remove_cached(image_id: i64) {
+    let _ = std::fs::remove_file(cache_path(image_id));
+    remove_edited_except(image_id, None);
+}
+
+fn remove_edited_except(image_id: i64, keep: Option<&std::path::Path>) {
+    let prefix = edited_prefix(image_id);
+    let Ok(entries) = std::fs::read_dir(thumbs_dir()) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let ours = entry.file_name().to_str().is_some_and(|n| n.starts_with(&prefix));
+        if ours && Some(path.as_path()) != keep {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+/// Long edge the source is cut to when the GPU cannot take the full-size
+/// preview; still enough that clarity and texture radii look about right.
+const FALLBACK_SOURCE_EDGE: u32 = 2048;
+
+/// The thumbnail of `rec` with its saved edit (`edit_json`) applied, from
+/// cache when possible. `render` runs the develop pipeline over a decode.
+///
+/// The source is the same fast decode the develop view paints first (the
+/// camera JPEG, or a RAW's embedded preview, at full size, so pixel-radius
+/// effects such as clarity match the editor), not the linear RAW decode,
+/// which takes seconds per frame. RAW thumbnails therefore show the camera's
+/// tone rendering under the edit rather than our base curve, the same
+/// approximation the editor shows while the full decode loads.
+pub fn get_or_create_edited(
+    rec: &ImageRecord,
+    edit_json: &str,
+    mut render: impl FnMut(&FullImage) -> Result<image::RgbaImage>,
+) -> Result<image::RgbaImage> {
+    let cached = edited_cache_path(rec.id, edit_json);
+    if let Ok(img) = image::open(&cached) {
+        return Ok(img.to_rgba8());
+    }
+
+    let source = crate::decode::full::decode_preview(rec)?;
+    let rendered = match render(&source) {
+        Ok(img) => img,
+        Err(e) => {
+            tracing::debug!("{}: full-size edited thumb failed ({e:#}); retrying smaller", rec.file_name);
+            render(&shrink(source, FALLBACK_SOURCE_EDGE)?)?
+        }
+    };
+    let thumb = DynamicImage::ImageRgba8(rendered).thumbnail(THUMB_LONG_EDGE, THUMB_LONG_EDGE);
+    match thumb.to_rgb8().save(&cached) {
+        Ok(()) => remove_edited_except(rec.id, Some(&cached)),
+        Err(e) => tracing::warn!("failed to write thumb cache {}: {e}", cached.display()),
+    }
+    Ok(thumb.to_rgba8())
+}
+
+/// Downscale an 8-bit decode to `edge` on its long side.
+fn shrink(mut image: FullImage, edge: u32) -> Result<FullImage> {
+    let FullPixels::Srgb8(rgba) = image.pixels else {
+        anyhow::bail!("expected an 8-bit preview decode");
+    };
+    let img = image::RgbaImage::from_raw(image.width, image.height, rgba)
+        .context("bad preview buffer")?;
+    let small = DynamicImage::ImageRgba8(img).thumbnail(edge, edge).to_rgba8();
+    image.width = small.width();
+    image.height = small.height();
+    image.pixels = FullPixels::Srgb8(small.into_raw());
+    Ok(image)
 }
 
 /// Produce the thumbnail for `rec`, from cache when possible.
