@@ -1,0 +1,97 @@
+# Flatpak build of Effective Darkroom, for installing on non-NixOS machines
+# (e.g. Fedora). Build a single-file bundle with ./build.sh.
+#
+# Not a Flathub-grade manifest: cargo fetches crates over the network during
+# the build instead of from a generated sources list.
+app-id: io.github.bkiu.EffectiveDarkroom
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.llvm21
+command: effective-darkroom
+
+finish-args:
+  - --share=ipc
+  - --socket=x11
+  # main.rs prefers XWayland; ED_WAYLAND=1 still needs the socket.
+  - --socket=wayland
+  # GPU (Vulkan via the runtime's Mesa/NVIDIA GL extensions) and USB cameras
+  # for libgphoto2.
+  - --device=all
+  # Immich upload.
+  - --share=network
+  # The catalog stores absolute paths to originals, so photos must be reachable
+  # at their real paths rather than through document-portal FUSE paths.
+  - --filesystem=home
+  - --filesystem=/run/media
+  - --filesystem=/media
+
+modules:
+  # libltdl, required by libgphoto2's camlib loader.
+  - name: libtool
+    config-opts:
+      - --disable-static
+    cleanup:
+      - /bin
+      - /share
+    sources:
+      - type: archive
+        url: https://ftpmirror.gnu.org/libtool/libtool-2.5.4.tar.xz
+        sha256: f81f5860666b0bc7d84baddefa60d1cb9fa6fceb2398cc3baca6afaa60266675
+
+  - name: libexif
+    config-opts:
+      - --disable-static
+      - --disable-docs
+    sources:
+      - type: archive
+        url: https://github.com/libexif/libexif/releases/download/v0.6.26/libexif-0.6.26.tar.xz
+        sha256: 4a055ed6575e61ca46c3172be3c753cc16c9becd0f99ec71d58dd0e471476c0c
+
+  - name: libgphoto2
+    config-opts:
+      - --disable-static
+      # Both supported cameras (EOS RP, X100V) speak PTP.
+      - --with-camlibs=ptp2
+      - --disable-nls
+    cleanup:
+      - /bin
+    sources:
+      - type: archive
+        url: https://github.com/gphoto/libgphoto2/releases/download/v2.5.34/libgphoto2-2.5.34.tar.xz
+        sha256: 51993f5d9bfb6b4e5925cbbe5883085791bff6f81bcacb8ffe1b783ce76d586a
+
+  - name: libraw
+    config-opts:
+      - --disable-static
+      - --disable-examples
+    sources:
+      - type: archive
+        url: https://www.libraw.org/data/LibRaw-0.22.1.tar.gz
+        sha256: a789dc4e2409e2901d93793a4e0b80c7b49d0d97cf6ad71c850eb7616acfd786
+
+  - name: effective-darkroom
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm21/bin
+      prepend-ld-library-path: /usr/lib/sdk/llvm21/lib
+      env:
+        CARGO_HOME: /run/build/effective-darkroom/cargo
+        LIBCLANG_PATH: /usr/lib/sdk/llvm21/lib
+      build-args:
+        - --share=network
+    build-commands:
+      - cargo build --release --locked
+      - install -Dm755 target/release/effective-darkroom /app/bin/effective-darkroom
+      - install -Dm644 assets/icon.png /app/share/icons/hicolor/256x256/apps/io.github.bkiu.EffectiveDarkroom.png
+      - install -Dm644 packaging/flatpak/io.github.bkiu.EffectiveDarkroom.desktop /app/share/applications/io.github.bkiu.EffectiveDarkroom.desktop
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - result
+          - .git
+          - .direnv

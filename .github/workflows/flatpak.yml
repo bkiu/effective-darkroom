@@ -1,0 +1,38 @@
+# Builds the Flatpak bundle. Pushing a v* tag also publishes it as a GitHub
+# release asset; Actions → Flatpak → "Run workflow" builds without releasing.
+name: Flatpak
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  flatpak:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      options: --privileged
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: effective-darkroom.flatpak
+          manifest-path: packaging/flatpak/io.github.bkiu.EffectiveDarkroom.yml
+          cache-key: flatpak-builder-${{ github.sha }}
+
+      - uses: softprops/action-gh-release@v3
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: effective-darkroom.flatpak
+          body: |
+            Install on Fedora (or any distro with Flatpak and Flathub):
+
+            ```sh
+            flatpak install --user effective-darkroom.flatpak
+            ```
+
+            Then launch Effective Darkroom from the app menu.

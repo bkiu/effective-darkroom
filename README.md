@@ -4,7 +4,22 @@ A native Linux photo library and non-destructive RAW/JPEG editor in the
 spirit of Lightroom, written in Rust (egui/eframe + wgpu). Optimized for the
 Canon EOS RP (.CR3) and Fujifilm X100V (.RAF).
 
-## Running
+## Installing (Fedora and other distros)
+
+Download `effective-darkroom.flatpak` from the
+[latest release](https://github.com/bkiu/effective-darkroom/releases/latest)
+and install it:
+
+```sh
+flatpak install --user effective-darkroom.flatpak
+```
+
+The manifest is in `packaging/flatpak/`; `packaging/flatpak/build.sh` builds
+the same bundle locally, and pushing a `v*` tag builds and attaches it to a
+GitHub release (`.github/workflows/flatpak.yml`). Inside the sandbox the
+catalog lives under `~/.var/app/io.github.bkiu.EffectiveDarkroom/`.
+
+## Running from source
 
 ```sh
 nix develop        # or rely on direnv (.envrc)

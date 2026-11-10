@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Effective Darkroom
+Comment=RAW/JPEG library and editor
+Exec=effective-darkroom
+Icon=io.github.bkiu.EffectiveDarkroom
+Categories=Graphics;Photography;
+StartupWMClass=effective-darkroom
